@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PSL 产品选型清单</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section class="login-shell hidden" id="loginView">
+        <div class="login-panel">
+          <div>
+            <p class="eyebrow">Product Selection List</p>
+            <h1>PSL 产品选型清单</h1>
+            <p class="muted">登录后可维护产品参数、上传模板、筛选型号并生成横向对比。</p>
+          </div>
+          <form id="loginForm" class="form-grid">
+            <label>
+              <span>账号</span>
+              <input name="username" value="admin" autocomplete="username" />
+            </label>
+            <label>
+              <span>密码</span>
+              <input name="password" type="password" value="admin123" autocomplete="current-password" />
+            </label>
+            <button class="primary" type="submit">登录</button>
+            <button id="guestBtn" class="ghost" type="button">继续浏览</button>
+            <p class="hint">默认管理员：admin / admin123</p>
+          </form>
+        </div>
+      </section>
+
+      <section class="workspace" id="mainView">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">PSL Selection</p>
+            <h1>产品选型</h1>
+          </div>
+          <div class="top-actions">
+            <span id="userBadge" class="badge"></span>
+            <button id="loginBtn" class="ghost" type="button">登录</button>
+            <button id="refreshBtn" class="ghost" type="button">刷新</button>
+            <button id="logoutBtn" class="ghost" type="button">退出</button>
+          </div>
+        </header>
+
+        <details class="filter-drawer" id="filterDrawer">
+          <summary>
+            <span class="drawer-title">筛选与数据维护</span>
+            <span class="drawer-meta" id="drawerMeta">点击展开筛选条件和操作按钮</span>
+          </summary>
+          <section class="toolbar">
+            <div class="filters">
+            <label>
+              <span>搜索</span>
+              <input id="searchInput" placeholder="型号、名称、参数值" />
+            </label>
+            <label>
+              <span>系列</span>
+              <select id="seriesFilter"></select>
+            </label>
+            <label>
+              <span>标签</span>
+              <select id="tagFilter"></select>
+            </label>
+            <label>
+              <span>关键参数</span>
+              <select id="paramFilter"></select>
+            </label>
+            <label>
+              <span>最小值</span>
+              <input id="minFilter" inputmode="decimal" placeholder="不限" />
+            </label>
+            <label>
+              <span>最大值</span>
+              <input id="maxFilter" inputmode="decimal" placeholder="不限" />
+            </label>
+            </div>
+            <div class="commands">
+            <a class="secondary role-edit" href="/api/template.csv">下载模板</a>
+            <button id="uploadBtn" class="secondary role-edit" type="button">上传数据</button>
+            <button id="auditBtn" class="secondary role-edit" type="button">修改记录</button>
+            <button id="usersBtn" class="secondary role-admin" type="button">用户管理</button>
+            <button id="templateBtn" class="secondary role-edit" type="button">表格模板</button>
+            <button id="addProductBtn" class="primary role-edit" type="button">新增产品</button>
+            </div>
+          </section>
+        </details>
+
+        <section class="status-row">
+          <div id="summary"></div>
+          <div id="message" class="message"></div>
+        </section>
+
+        <section class="table-shell">
+          <table id="selectionTable" class="selection-table"></table>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="productDialog">
+      <form id="productForm" method="dialog" class="dialog-body">
+        <div class="dialog-head">
+          <h2 id="productDialogTitle">产品</h2>
+          <button class="icon" id="closeProductBtn" type="button">×</button>
+        </div>
+        <input name="id" type="hidden" />
+        <div class="form-grid two">
+          <label><span>产品型号</span><input name="code" required /></label>
+          <label><span>产品名称</span><input name="name" required /></label>
+          <label><span>产品系列</span><input name="series" /></label>
+          <label><span>产品标签</span><input name="tag" /></label>
+          <label><span>主体品牌</span><input name="manufacturer" /></label>
+          <label><span>排序</span><input name="sort_order" inputmode="numeric" /></label>
+          <label class="wide"><span>产品图片 URL</span><input name="image_url" placeholder="可填图片链接，留空显示占位" /></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="ghost" id="cancelProductBtn" type="button">取消</button>
+          <button class="primary" id="saveProductBtn" type="button">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="paramDialog">
+      <form id="paramForm" method="dialog" class="dialog-body">
+        <div class="dialog-head">
+          <h2 id="paramDialogTitle">新增参数</h2>
+          <button class="icon" id="closeParamBtn" type="button">×</button>
+        </div>
+        <input name="id" type="hidden" />
+        <div class="form-grid two">
+          <label><span>参数分组</span><input name="group_name" required placeholder="基本参数" /></label>
+          <label><span>参数名称</span><input name="name" required placeholder="长度" /></label>
+          <label><span>单位</span><input name="unit" placeholder="mm" /></label>
+          <label><span>类型</span><select name="data_type"><option value="text">文本</option><option value="number">数值</option></select></label>
+          <label><span>排序</span><input name="sort_order" inputmode="numeric" placeholder="10" /></label>
+          <label class="check"><input name="filterable" type="checkbox" /> <span>允许作为筛选项</span></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="ghost" id="cancelParamBtn" type="button">取消</button>
+          <button class="primary" id="saveParamBtn" type="button">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="templateDialog">
+      <div class="dialog-body template-dialog">
+        <div class="dialog-head">
+          <h2>表格模板</h2>
+          <div class="dialog-head-actions">
+            <button class="secondary" id="templateAddParamBtn" type="button">新增参数</button>
+            <button class="icon" id="closeTemplateBtn" type="button">×</button>
+          </div>
+        </div>
+        <div id="templateList" class="template-list"></div>
+      </div>
+    </dialog>
+
+    <dialog id="uploadDialog">
+      <form id="uploadForm" method="dialog" class="dialog-body">
+        <div class="dialog-head">
+          <h2>上传数据</h2>
+          <button class="icon" value="cancel" type="submit">×</button>
+        </div>
+        <p class="muted">支持 CSV 和 XLSX。第一行从第 4 列开始为产品型号，前三列依次为 group、parameter、unit；也支持长表字段 code、series、group、parameter、unit、value。</p>
+        <label class="file-drop">
+          <input id="uploadFile" name="file" type="file" accept=".csv,.xlsx,.xlsm" />
+          <span>选择 CSV / XLSX 文件</span>
+        </label>
+        <div class="dialog-actions">
+          <button class="ghost" value="cancel" type="submit">取消</button>
+          <button class="primary" id="submitUploadBtn" type="button">导入</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="auditDialog">
+      <div class="dialog-body audit-dialog">
+        <div class="dialog-head">
+          <h2>修改记录</h2>
+          <button class="icon" id="closeAuditBtn" type="button">×</button>
+        </div>
+        <div id="auditList" class="audit-list"></div>
+      </div>
+    </dialog>
+
+    <dialog id="usersDialog">
+      <div class="dialog-body audit-dialog">
+        <div class="dialog-head">
+          <h2>用户管理</h2>
+          <button class="icon" id="closeUsersBtn" type="button">×</button>
+        </div>
+        <form id="userForm" class="user-form">
+          <input name="id" type="hidden" />
+          <input name="username" placeholder="账号" required />
+          <input name="display_name" placeholder="显示名" required />
+          <select name="role">
+            <option value="viewer">查看者</option>
+            <option value="editor">编辑员</option>
+            <option value="admin">管理员</option>
+          </select>
+          <input name="password" placeholder="新密码" type="password" />
+          <button class="primary" id="saveUserBtn" type="button">保存用户</button>
+        </form>
+        <div id="usersList" class="users-list"></div>
+      </div>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
