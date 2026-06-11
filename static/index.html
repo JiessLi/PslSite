@@ -8,12 +8,22 @@
   </head>
   <body>
     <main id="app">
-      <section class="login-shell hidden" id="loginView">
+    <dialog id="loginDialog">
+      <div class="dialog-body">
+        <div class="dialog-head">
+          <h2>登录 / 注册</h2>
+          <button class="icon" id="closeLoginBtn" type="button">×</button>
+        </div>
         <div class="login-panel">
           <div>
             <p class="eyebrow">Product Selection List</p>
             <h1>PSL 产品选型清单</h1>
             <p class="muted">登录后可维护产品参数、上传模板、筛选型号并生成横向对比。</p>
+          </div>
+        <div class="login-forms">
+          <div class="login-tabs">
+            <button class="login-tab active" data-tab="login" type="button">登录</button>
+            <button class="login-tab" data-tab="register" type="button">注册</button>
           </div>
           <form id="loginForm" class="form-grid">
             <label>
@@ -28,8 +38,37 @@
             <button id="guestBtn" class="ghost" type="button">继续浏览</button>
             <p class="hint">默认管理员：admin / admin123</p>
           </form>
+          <form id="registerForm" class="form-grid hidden">
+            <label>
+              <span>邮箱</span>
+              <input name="email" type="email" placeholder="用于接收验证码" autocomplete="email" />
+            </label>
+            <div class="code-row">
+              <label>
+                <span>验证码</span>
+                <input name="code" placeholder="6位数字" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
+              </label>
+              <button id="sendCodeBtn" class="secondary" type="button">发送验证码</button>
+            </div>
+            <label>
+              <span>用户名</span>
+              <input name="username" placeholder="登录用" autocomplete="username" />
+            </label>
+            <label>
+              <span>显示名</span>
+              <input name="display_name" placeholder="在页面上显示的名称" autocomplete="name" />
+            </label>
+            <label>
+              <span>密码</span>
+              <input name="password" type="password" placeholder="至少6位" autocomplete="new-password" />
+            </label>
+            <button class="primary" type="submit">注册并登录</button>
+            <p class="hint">注册后自动分配至默认用户组</p>
+          </form>
         </div>
-      </section>
+      </div>
+      </div>
+    </dialog>
 
       <section class="workspace" id="mainView">
         <header class="topbar">
@@ -38,10 +77,18 @@
             <h1>产品选型</h1>
           </div>
           <div class="top-actions">
-            <span id="userBadge" class="badge"></span>
+            <button id="avatarBtn" class="avatar-btn hidden" type="button" title="用户菜单">
+              <span id="avatarInitial" class="avatar-initial"></span>
+            </button>
+            <div id="avatarMenu" class="avatar-menu hidden">
+              <button data-action="profile" type="button">👤 个人资料</button>
+              <button data-action="dataManage" type="button" id="dataManageBtn">📊 数据管理</button>
+              <button data-action="admin" type="button" id="adminEntryBtn">⚙️ 管理后台</button>
+              <hr />
+              <button data-action="logout" type="button">🚪 退出登录</button>
+            </div>
             <button id="loginBtn" class="ghost" type="button">登录</button>
             <button id="refreshBtn" class="ghost" type="button">刷新</button>
-            <button id="logoutBtn" class="ghost" type="button">退出</button>
           </div>
         </header>
 
@@ -78,12 +125,11 @@
             </label>
             </div>
             <div class="commands">
-            <a class="secondary role-edit" href="/api/template.csv">下载模板</a>
+            <a class="secondary role-admin" href="/api/template.csv">下载模板</a>
             <button id="uploadBtn" class="secondary role-edit" type="button">上传数据</button>
-            <button id="auditBtn" class="secondary role-edit" type="button">修改记录</button>
-            <button id="usersBtn" class="secondary role-admin" type="button">用户管理</button>
+
             <button id="templateBtn" class="secondary role-edit" type="button">表格模板</button>
-            <button id="addProductBtn" class="primary role-edit" type="button">新增产品</button>
+            <button id="addProductBtn" class="primary role-edit" type="button">产品管理</button>
             </div>
           </section>
         </details>
@@ -98,6 +144,22 @@
         </section>
       </section>
     </main>
+
+    <dialog id="productManageDialog">
+      <div class="dialog-body">
+        <div class="dialog-head">
+          <h2>产品管理</h2>
+          <button class="icon" id="closeProductManageBtn" type="button">×</button>
+        </div>
+        <form id="productManageForm" class="user-form">
+          <input name="id" type="hidden" />
+          <input name="code" placeholder="产品型号（必填）" required />
+          <input name="name" placeholder="产品名称" />
+          <button class="primary" id="saveManageProductBtn" type="button">新增产品</button>
+        </form>
+        <div id="productManageList" class="users-list"></div>
+      </div>
+    </dialog>
 
     <dialog id="productDialog">
       <form id="productForm" method="dialog" class="dialog-body">
@@ -175,37 +237,108 @@
       </form>
     </dialog>
 
-    <dialog id="auditDialog">
-      <div class="dialog-body audit-dialog">
+    <!-- Image lightbox -->
+    <div class="lightbox-overlay" id="lightboxOverlay" hidden>
+      <button class="lightbox-close" id="lightboxClose" type="button" title="关闭 (Esc)">×</button>
+      <img class="lightbox-image" id="lightboxImage" alt="" />
+    </div>
+
+    <!-- Profile dialog -->
+    <dialog id="profileDialog">
+      <div class="dialog-body">
         <div class="dialog-head">
-          <h2>修改记录</h2>
-          <button class="icon" id="closeAuditBtn" type="button">×</button>
+          <h2>个人资料</h2>
+          <button class="icon" id="closeProfileBtn" type="button">×</button>
         </div>
-        <div id="auditList" class="audit-list"></div>
+        <form id="profileForm" class="settings-form">
+          <label>
+            <span>用户名</span>
+            <input name="username" disabled />
+          </label>
+          <label>
+            <span>显示名</span>
+            <input name="display_name" required />
+          </label>
+          <label>
+            <span>角色</span>
+            <input name="role" disabled />
+          </label>
+          <label>
+            <span>新密码</span>
+            <input name="password" type="password" placeholder="留空则不修改" autocomplete="new-password" />
+          </label>
+          <div class="dialog-actions">
+            <button class="ghost" id="cancelProfileBtn" type="button">取消</button>
+            <button class="primary" type="submit">保存</button>
+          </div>
+        </form>
       </div>
     </dialog>
 
-    <dialog id="usersDialog">
-      <div class="dialog-body audit-dialog">
-        <div class="dialog-head">
-          <h2>用户管理</h2>
-          <button class="icon" id="closeUsersBtn" type="button">×</button>
+    <!-- Admin Panel (full-page view) -->
+    <section class="workspace hidden" id="adminView">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">PSL Selection</p>
+          <h1>管理后台</h1>
         </div>
-        <form id="userForm" class="user-form">
-          <input name="id" type="hidden" />
-          <input name="username" placeholder="账号" required />
-          <input name="display_name" placeholder="显示名" required />
-          <select name="role">
-            <option value="viewer">查看者</option>
-            <option value="editor">编辑员</option>
-            <option value="admin">管理员</option>
-          </select>
-          <input name="password" placeholder="新密码" type="password" />
-          <button class="primary" id="saveUserBtn" type="button">保存用户</button>
+        <button id="backToMainBtn" class="ghost" type="button">← 返回选型清单</button>
+      </header>
+      <nav class="admin-tabs">
+        <button class="admin-tab active" data-tab="users">👥 用户管理</button>
+        <button class="admin-tab" data-tab="settings">📧 系统设置</button>
+        <button class="admin-tab" data-tab="audit">📋 修改记录</button>
+      </nav>
+      <section class="admin-content" id="adminUsersPanel">
+        <div class="users-layout">
+          <div class="users-groups-panel">
+            <div class="panel-subhead">用户组</div>
+            <form id="adminUserGroupForm" class="user-form">
+              <input name="id" type="hidden" />
+              <input name="name" placeholder="组名称" required />
+              <input name="description" placeholder="描述（可选）" />
+              <button class="primary" id="adminSaveGroupBtn" type="button">新增用户组</button>
+            </form>
+            <div id="adminUserGroupsList" class="users-list"></div>
+          </div>
+          <div class="users-panel">
+            <div class="panel-subhead">用户 <span id="adminGroupLabel" class="muted"></span></div>
+            <form id="adminUserForm" class="user-form">
+              <input name="id" type="hidden" />
+              <input name="username" placeholder="账号" required />
+              <input name="display_name" placeholder="显示名" required />
+              <select name="role">
+                <option value="viewer">查看者</option>
+                <option value="editor">编辑员</option>
+                <option value="admin">管理员</option>
+              </select>
+              <input name="password" placeholder="新密码" type="password" />
+              <button class="primary" id="adminSaveUserBtn" type="button">保存用户</button>
+            </form>
+            <div id="adminUsersList" class="users-list"></div>
+          </div>
+        </div>
+      </section>
+      <section class="admin-content hidden" id="adminSettingsPanel">
+        <form id="adminSettingsForm" class="settings-form">
+          <fieldset>
+            <legend>📧 SMTP 邮箱配置</legend>
+            <p class="hint">用于发送注册验证码。以 QQ 邮箱为例：smtp.qq.com，端口 465，需在 QQ 邮箱设置中生成授权码。</p>
+            <label><span>SMTP 服务器</span><input name="smtp_host" placeholder="smtp.qq.com" /></label>
+            <label><span>端口</span><input name="smtp_port" placeholder="465" inputmode="numeric" /></label>
+            <label><span>邮箱账号</span><input name="smtp_user" placeholder="your@qq.com" autocomplete="email" /></label>
+            <label><span>邮箱密码 / 授权码</span><input name="smtp_pass" type="password" placeholder="QQ 邮箱授权码" autocomplete="off" /></label>
+            <label><span>发件人地址</span><input name="smtp_sender" placeholder="留空则与邮箱账号一致" /></label>
+          </fieldset>
+          <div class="dialog-actions">
+            <button class="primary" type="submit">保存设置</button>
+          </div>
         </form>
-        <div id="usersList" class="users-list"></div>
-      </div>
-    </dialog>
+      </section>
+      <section class="admin-content hidden" id="adminAuditPanel">
+        <div id="adminAuditList" class="audit-list"></div>
+      </section>
+    </section>
 
     <script src="/app.js"></script>
   </body>

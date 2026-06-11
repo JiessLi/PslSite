@@ -8,10 +8,13 @@ import json
 import mimetypes
 import os
 import secrets
+import smtplib
 import sqlite3
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +33,27 @@ UPLOAD_DIR = ROOT / "uploads"
 DB_PATH = DATA_DIR / "psl_selection.db"
 PBKDF2_ROUNDS = 180_000
 SESSIONS: dict[str, dict] = {}
+
+# --- SMTP / 邮箱验证码配置 ---
+CODE_EXPIRE_MINUTES = 5
+CODE_RATE_LIMIT_SECONDS = 60  # 同一邮箱两次发码最小间隔
+
+
+# --- DB-backed settings with env-var fallback ---
+def get_setting(conn: sqlite3.Connection, key: str) -> str:
+    row = conn.execute("SELECT value FROM system_settings WHERE key = ?", (key,)).fetchone()
+    if row and row["value"]:
+        return row["value"]
+    # Fallback to env var for backward compatibility
+    env_key = f"PSL_{key.upper()}"
+    return os.environ.get(env_key, "")
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO system_settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
 
 
 def now_iso() -> str:
@@ -66,6 +90,40 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def json_dumps(data) -> bytes:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def send_email_code(to_email: str, code: str) -> None:
+    """Send a verification code email. Raises on failure."""
+    with connect() as conn:
+        smtp_host = get_setting(conn, "smtp_host")
+        smtp_port = get_setting(conn, "smtp_port")
+        smtp_user = get_setting(conn, "smtp_user")
+        smtp_pass = get_setting(conn, "smtp_pass")
+        smtp_sender = get_setting(conn, "smtp_sender") or smtp_user
+    if not smtp_host:
+        raise RuntimeError("SMTP 未配置，请联系管理员设置邮箱服务")
+    port = int(smtp_port or 465)
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "PSL 产品选型 — 邮箱验证码"
+    msg["From"] = smtp_sender
+    msg["To"] = to_email
+    html = f"""\
+<html><body style="font-family:sans-serif;padding:20px;">
+<h2 style="color:#136f63;">PSL 产品选型清单</h2>
+<p>您的注册验证码是：</p>
+<div style="font-size:28px;font-weight:bold;letter-spacing:6px;color:#136f63;padding:12px 20px;background:#eef6f5;border-radius:6px;display:inline-block;">{code}</div>
+<p style="color:#888;margin-top:16px;">验证码 {CODE_EXPIRE_MINUTES} 分钟内有效，请勿转发。</p>
+</body></html>"""
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    if port == 465:
+        with smtplib.SMTP_SSL(smtp_host, port, timeout=8) as smtp:
+            smtp.login(smtp_user, smtp_pass)
+            smtp.sendmail(smtp_sender, [to_email], msg.as_string())
+    else:
+        with smtplib.SMTP(smtp_host, port, timeout=8) as smtp:
+            smtp.starttls()
+            smtp.login(smtp_user, smtp_pass)
+            smtp.sendmail(smtp_sender, [to_email], msg.as_string())
 
 
 def row_to_dict(row: sqlite3.Row) -> dict:
@@ -127,12 +185,21 @@ def is_sensitive_parameter(parameter: dict) -> bool:
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('admin', 'editor', 'viewer')),
     password_hash TEXT NOT NULL,
+    group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
 );
 
@@ -201,6 +268,20 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     target TEXT NOT NULL,
     detail TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT DEFAULT ''
 );
 """
 
@@ -294,14 +375,45 @@ def init_db() -> None:
     UPLOAD_DIR.mkdir(exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # Migration: add group_id column to users if missing
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+        if "group_id" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL")
+        if "email" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''")
+        # Migration: add used column to email_codes if missing (for older DBs)
+        ec_cols = [r["name"] for r in conn.execute("PRAGMA table_info(email_codes)").fetchall()]
+        if "used" not in ec_cols:
+            conn.execute("ALTER TABLE email_codes ADD COLUMN used INTEGER DEFAULT 0")
+        if "created_at" not in ec_cols:
+            conn.execute("ALTER TABLE email_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+        # Seed system_settings defaults if empty
+        if conn.execute("SELECT COUNT(*) FROM system_settings").fetchone()[0] == 0:
+            for k in ("smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_sender"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO system_settings(key, value) VALUES (?, '')",
+                    (k,),
+                )
+        # Seed default user group
+        group_count = conn.execute("SELECT COUNT(*) FROM user_groups").fetchone()[0]
+        if group_count == 0:
+            conn.execute(
+                "INSERT INTO user_groups(name, description, sort_order, created_at) VALUES (?, ?, ?, ?)",
+                ("默认组", "系统默认用户组", 10, now_iso()),
+            )
+        # Assign existing users without a group to the default group
+        default_group = conn.execute("SELECT id FROM user_groups WHERE name = ?", ("默认组",)).fetchone()
+        if default_group:
+            conn.execute("UPDATE users SET group_id = ? WHERE group_id IS NULL", (default_group["id"],))
         user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if user_count == 0:
+            default_group = conn.execute("SELECT id FROM user_groups WHERE name = ?", ("默认组",)).fetchone()
             conn.execute(
                 """
-                INSERT INTO users(username, display_name, role, password_hash, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users(username, display_name, role, password_hash, group_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                ("admin", "系统管理员", "admin", hash_password("admin123"), now_iso()),
+                ("admin", "系统管理员", "admin", hash_password("admin123"), default_group["id"] if default_group else None, now_iso()),
             )
         product_count = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
         if product_count == 0:
@@ -760,6 +872,23 @@ class AppHandler(BaseHTTPRequestHandler):
                     ]
                 self.send_json({"logs": rows})
                 return
+            if path == "/api/user-groups":
+                user = self.require_role("admin")
+                if not user:
+                    return
+                with connect() as conn:
+                    rows = [
+                        row_to_dict(row)
+                        for row in conn.execute(
+                            """
+                            SELECT id, name, description, sort_order, created_at
+                            FROM user_groups
+                            ORDER BY sort_order ASC, id ASC
+                            """
+                        )
+                    ]
+                self.send_json({"groups": rows})
+                return
             if path == "/api/users":
                 user = self.require_role("admin")
                 if not user:
@@ -769,22 +898,32 @@ class AppHandler(BaseHTTPRequestHandler):
                         row_to_dict(row)
                         for row in conn.execute(
                             """
-                            SELECT id, username, display_name, role, created_at
-                            FROM users
-                            ORDER BY id ASC
+                            SELECT u.id, u.username, u.display_name, u.role, u.group_id, u.created_at,
+                                   COALESCE(g.name, '') AS group_name
+                            FROM users u
+                            LEFT JOIN user_groups g ON g.id = u.group_id
+                            ORDER BY u.id ASC
                             """
                         )
                     ]
                 self.send_json({"users": rows})
                 return
             if path == "/api/template.csv":
-                if not self.require_user():
+                if not self.require_role("admin"):
                     return
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/csv; charset=utf-8")
                 self.send_header("Content-Disposition", 'attachment; filename="psl-import-template.csv"')
                 self.end_headers()
                 self.wfile.write(make_template_csv())
+                return
+            if path == "/api/settings":
+                if not self.require_role("admin"):
+                    return
+                with connect() as conn:
+                    rows = conn.execute("SELECT key, value FROM system_settings ORDER BY key").fetchall()
+                    settings = {row["key"]: row["value"] for row in rows}
+                self.send_json({"settings": settings})
                 return
             self.serve_static(path)
         except Exception as exc:
@@ -795,6 +934,120 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             path = parsed.path
+            if path == "/api/send-register-code":
+                data = self.read_json()
+                email = (data.get("email") or "").strip().lower()
+                if not email or "@" not in email or "." not in email:
+                    self.send_error_json("请输入有效的邮箱地址")
+                    return
+                with connect() as conn:
+                    # Check if email already registered
+                    existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+                    if existing:
+                        self.send_error_json("该邮箱已被注册")
+                        return
+                    # Rate limit: check last code sent within CODE_RATE_LIMIT_SECONDS
+                    last = conn.execute(
+                        "SELECT id, created_at FROM email_codes WHERE email = ? ORDER BY id DESC LIMIT 1",
+                        (email,),
+                    ).fetchone()
+                    if last:
+                        last_time = datetime.fromisoformat(last["created_at"]).replace(tzinfo=None)
+                        now = datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
+                        elapsed = (now - last_time).total_seconds()
+                        if elapsed < CODE_RATE_LIMIT_SECONDS:
+                            self.send_error_json(f"请 {int(CODE_RATE_LIMIT_SECONDS - elapsed)} 秒后再试")
+                            return
+                    # Generate code and store
+                    code = str(secrets.randbelow(900000) + 100000)  # 6-digit
+                    expires_at = datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
+                    expires_at = (expires_at + timedelta(minutes=CODE_EXPIRE_MINUTES)).isoformat(timespec="seconds")
+                    conn.execute(
+                        "INSERT INTO email_codes(email, code, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                        (email, code, expires_at, now_iso()),
+                    )
+                try:
+                    send_email_code(email, code)
+                except Exception as exc:
+                    self.send_error_json(f"邮件发送失败：{exc}")
+                    return
+                self.send_json({"ok": True, "message": "验证码已发送，请查收邮件"})
+                return
+            if path == "/api/register":
+                data = self.read_json()
+                email = (data.get("email") or "").strip().lower()
+                code = (data.get("code") or "").strip()
+                username = (data.get("username") or "").strip()
+                display_name = (data.get("display_name") or "").strip()
+                password = (data.get("password") or "").strip()
+                if not email or not code or not username or not display_name or not password:
+                    self.send_error_json("请填写所有字段")
+                    return
+                if len(password) < 6:
+                    self.send_error_json("密码至少 6 位")
+                    return
+                with connect() as conn:
+                    # Verify code
+                    now_naive = datetime.now(timezone.utc).astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
+                    row = conn.execute(
+                        "SELECT id, code, expires_at, used FROM email_codes WHERE email = ? ORDER BY id DESC LIMIT 1",
+                        (email,),
+                    ).fetchone()
+                    if not row:
+                        self.send_error_json("请先获取验证码")
+                        return
+                    if row["used"]:
+                        self.send_error_json("验证码已使用，请重新获取")
+                        return
+                    if row["expires_at"] < now_naive:
+                        self.send_error_json("验证码已过期，请重新获取")
+                        return
+                    if row["code"] != code:
+                        self.send_error_json("验证码错误")
+                        return
+                    # Mark code as used
+                    conn.execute("UPDATE email_codes SET used = 1 WHERE id = ?", (row["id"],))
+                    # Check username uniqueness
+                    if conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone():
+                        self.send_error_json("该用户名已被占用")
+                        return
+                    if conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone():
+                        self.send_error_json("该邮箱已被注册")
+                        return
+                    # Get default group
+                    default_group = conn.execute(
+                        "SELECT id FROM user_groups ORDER BY sort_order ASC, id ASC LIMIT 1"
+                    ).fetchone()
+                    group_id = default_group["id"] if default_group else None
+                    # Create user
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO users(username, display_name, role, password_hash, email, group_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            username,
+                            display_name,
+                            "viewer",
+                            hash_password(password),
+                            email,
+                            group_id,
+                            now_iso(),
+                        ),
+                    )
+                    new_id = cursor.lastrowid
+                    log_audit(conn, new_id, "register", f"user:{new_id}", {"email": email, "username": username})
+                # Auto login
+                token = secrets.token_urlsafe(32)
+                user = {
+                    "id": new_id,
+                    "username": username,
+                    "display_name": display_name,
+                    "role": "viewer",
+                }
+                SESSIONS[token] = user
+                self.send_json({"token": token, "user": user})
+                return
             if path == "/api/login":
                 data = self.read_json()
                 with connect() as conn:
@@ -851,6 +1104,27 @@ class AppHandler(BaseHTTPRequestHandler):
                     return
                 self.handle_upload(user)
                 return
+            if path == "/api/user-groups":
+                user = self.require_role("admin")
+                if not user:
+                    return
+                data = self.read_json()
+                name = (data.get("name") or "").strip()
+                if not name:
+                    self.send_error_json("用户组名称不能为空")
+                    return
+                with connect() as conn:
+                    max_sort = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM user_groups").fetchone()[0]
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO user_groups(name, description, sort_order, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (name, data.get("description", "").strip(), max_sort + 10, now_iso()),
+                    )
+                    log_audit(conn, user["id"], "create_user_group", f"group:{cursor.lastrowid}", {"name": name})
+                self.send_json({"id": cursor.lastrowid})
+                return
             if path == "/api/users":
                 user = self.require_role("admin")
                 if not user:
@@ -864,17 +1138,26 @@ class AppHandler(BaseHTTPRequestHandler):
                 if role not in {"admin", "editor", "viewer"}:
                     self.send_error_json("角色必须是 admin、editor 或 viewer")
                     return
+                group_id = data.get("group_id")
                 with connect() as conn:
+                    if group_id:
+                        group_id = int(group_id)
+                        if not conn.execute("SELECT id FROM user_groups WHERE id = ?", (group_id,)).fetchone():
+                            self.send_error_json("用户组不存在")
+                            return
+                    else:
+                        group_id = None
                     cursor = conn.execute(
                         """
-                        INSERT INTO users(username, display_name, role, password_hash, created_at)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO users(username, display_name, role, password_hash, group_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (
                             data["username"].strip(),
                             data["display_name"].strip(),
                             role,
                             hash_password(data["password"]),
+                            group_id,
                             now_iso(),
                         ),
                     )
@@ -956,6 +1239,50 @@ class AppHandler(BaseHTTPRequestHandler):
                     log_audit(conn, user["id"], "update_parameter", f"parameter:{parameter_id}", data)
                     self.send_json({"ok": True})
                     return
+                if path.startswith("/api/groups/"):
+                    group_id = int(path.rsplit("/", 1)[1])
+                    existing = conn.execute(
+                        "SELECT * FROM parameter_groups WHERE id = ?", (group_id,)
+                    ).fetchone()
+                    if not existing:
+                        self.send_error_json("分组不存在", HTTPStatus.NOT_FOUND)
+                        return
+                    conn.execute(
+                        "UPDATE parameter_groups SET sort_order = ? WHERE id = ?",
+                        (int(data.get("sort_order", existing["sort_order"] or 0) or 0), group_id),
+                    )
+                    log_audit(conn, user["id"], "update_group", f"group:{group_id}", data)
+                    self.send_json({"ok": True})
+                    return
+                if path.startswith("/api/user-groups/"):
+                    if user["role"] != "admin":
+                        self.send_error_json("当前账号没有操作权限", HTTPStatus.FORBIDDEN)
+                        return
+                    group_id = int(path.rsplit("/", 1)[1])
+                    existing = conn.execute("SELECT * FROM user_groups WHERE id = ?", (group_id,)).fetchone()
+                    if not existing:
+                        self.send_error_json("用户组不存在", HTTPStatus.NOT_FOUND)
+                        return
+                    name = (data.get("name") or existing["name"]).strip()
+                    if not name:
+                        self.send_error_json("用户组名称不能为空")
+                        return
+                    conn.execute(
+                        """
+                        UPDATE user_groups
+                        SET name = ?, description = ?, sort_order = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            name,
+                            (data.get("description") or existing["description"]).strip(),
+                            int(data.get("sort_order", existing["sort_order"] or 0) or 0),
+                            group_id,
+                        ),
+                    )
+                    log_audit(conn, user["id"], "update_user_group", f"group:{group_id}", data)
+                    self.send_json({"ok": True})
+                    return
                 if path.startswith("/api/users/"):
                     if user["role"] != "admin":
                         self.send_error_json("当前账号没有操作权限", HTTPStatus.FORBIDDEN)
@@ -969,26 +1296,44 @@ class AppHandler(BaseHTTPRequestHandler):
                     if role not in {"admin", "editor", "viewer"}:
                         self.send_error_json("角色必须是 admin、editor 或 viewer")
                         return
+                    group_id = data.get("group_id", existing["group_id"])
+                    if group_id is not None:
+                        group_id = int(group_id)
+                        if not conn.execute("SELECT id FROM user_groups WHERE id = ?", (group_id,)).fetchone():
+                            group_id = None
+                    else:
+                        group_id = None
                     if data.get("password"):
                         conn.execute(
                             """
                             UPDATE users
-                            SET display_name = ?, role = ?, password_hash = ?
+                            SET display_name = ?, role = ?, password_hash = ?, group_id = ?
                             WHERE id = ?
                             """,
                             (
                                 data.get("display_name", existing["display_name"]).strip(),
                                 role,
                                 hash_password(data["password"]),
+                                group_id,
                                 target_id,
                             ),
                         )
                     else:
                         conn.execute(
-                            "UPDATE users SET display_name = ?, role = ? WHERE id = ?",
-                            (data.get("display_name", existing["display_name"]).strip(), role, target_id),
+                            "UPDATE users SET display_name = ?, role = ?, group_id = ? WHERE id = ?",
+                            (data.get("display_name", existing["display_name"]).strip(), role, group_id, target_id),
                         )
                     log_audit(conn, user["id"], "update_user", f"user:{target_id}", {"role": role})
+                    self.send_json({"ok": True})
+                    return
+                if path == "/api/settings":
+                    if user["role"] != "admin":
+                        self.send_error_json("当前账号没有操作权限", HTTPStatus.FORBIDDEN)
+                        return
+                    for key in ("smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_sender"):
+                        if key in data:
+                            set_setting(conn, key, str(data.get(key, "")).strip())
+                    log_audit(conn, user["id"], "update_settings", "system_settings", {k: data.get(k, "***") for k in data})
                     self.send_json({"ok": True})
                     return
             self.send_error_json("接口不存在", HTTPStatus.NOT_FOUND)
@@ -1014,6 +1359,19 @@ class AppHandler(BaseHTTPRequestHandler):
                     parameter_id = int(path.rsplit("/", 1)[1])
                     conn.execute("DELETE FROM parameters WHERE id = ?", (parameter_id,))
                     log_audit(conn, user["id"], "delete_parameter", f"parameter:{parameter_id}", {})
+                    self.send_json({"ok": True})
+                    return
+                if path.startswith("/api/user-groups/"):
+                    if user["role"] != "admin":
+                        self.send_error_json("当前账号没有操作权限", HTTPStatus.FORBIDDEN)
+                        return
+                    group_id = int(path.rsplit("/", 1)[1])
+                    existing = conn.execute("SELECT id, name FROM user_groups WHERE id = ?", (group_id,)).fetchone()
+                    if not existing:
+                        self.send_error_json("用户组不存在", HTTPStatus.NOT_FOUND)
+                        return
+                    conn.execute("DELETE FROM user_groups WHERE id = ?", (group_id,))
+                    log_audit(conn, user["id"], "delete_user_group", f"group:{group_id}", {"name": existing["name"]})
                     self.send_json({"ok": True})
                     return
                 if path.startswith("/api/users/"):
@@ -1085,21 +1443,32 @@ class AppHandler(BaseHTTPRequestHandler):
 
 
 def make_template_csv() -> bytes:
-    rows = [
-        ["group", "parameter", "unit", "A-ZF0100", "A-KD0300"],
-        ["产品简介", "产品名称", "", "旋转线 I", "精灵线 I"],
-        ["产品简介", "产品系列", "", "翻箱倒料机器人", "潜伏机器人"],
-        ["产品简介", "产品标签", "", "食药级", "食药级"],
-        ["设备本体", "主体品牌", "", "123Robot", "123Robot"],
-        ["基本参数", "长度", "mm", "1434", "800"],
-        ["基本参数", "宽度", "mm", "834", "550"],
-        ["基本参数", "设备重量", "kg", "600", "200"],
-        ["售前支持", "BOM成本", "万元", "6", "5"],
-    ]
+    rows = [["group", "parameter", "unit"] + [row["code"] for row in _recent_products()]]
+    with connect() as conn:
+        for param_row in conn.execute(
+            """
+            SELECT g.name AS group_name, p.name, p.unit
+            FROM parameters p
+            JOIN parameter_groups g ON g.id = p.group_id
+            ORDER BY g.sort_order ASC, p.sort_order ASC
+            LIMIT 20
+            """
+        ):
+            rows.append([param_row["group_name"], param_row["name"], param_row["unit"] or ""])
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerows(rows)
     return output.getvalue().encode("utf-8-sig")
+
+
+def _recent_products(limit: int = 20) -> list[dict]:
+    with connect() as conn:
+        return [
+            row_to_dict(row)
+            for row in conn.execute(
+                "SELECT code FROM products ORDER BY sort_order ASC LIMIT ?", (limit,)
+            )
+        ]
 
 
 def main() -> None:

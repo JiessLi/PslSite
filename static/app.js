@@ -2,6 +2,7 @@ const state = {
   token: localStorage.getItem("psl_token") || "",
   user: null,
   catalog: null,
+  editMode: false,
   filters: { q: "", series: "", tag: "", parameterId: "", min: "", max: "" },
   selection: { anchor: null, focus: null },
 };
@@ -102,9 +103,21 @@ function renderFilters() {
 
 function productImage(product) {
   if (product.image_url) {
-    return `<img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.code)}" onerror="this.closest('.product-visual').classList.add('empty'); this.remove();" />`;
+    return `<img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.code)}" data-lightbox-src="${escapeHtml(product.image_url)}" onerror="this.closest('.product-visual').classList.add('empty'); this.remove();" />`;
   }
   return `<div class="placeholder-robot"><span></span><strong>${escapeHtml(product.code.slice(0, 2))}</strong></div>`;
+}
+
+function openLightbox(imgEl) {
+  const overlay = $("#lightboxOverlay");
+  const image = $("#lightboxImage");
+  image.src = imgEl.dataset.lightboxSrc || imgEl.src;
+  image.alt = imgEl.alt;
+  overlay.removeAttribute("hidden");
+}
+
+function closeLightbox() {
+  $("#lightboxOverlay").setAttribute("hidden", "");
 }
 
 function groupProductsByFirstRow(products) {
@@ -126,7 +139,8 @@ function renderTable() {
   if (!state.catalog) return;
   const productGroups = groupProductsByFirstRow(filteredProducts());
   const products = productGroups.flatMap((group) => group.products);
-  const canEdit = roleCanEdit();
+  const signedIn = Boolean(state.user);
+  const canEdit = signedIn && state.editMode;
   $("#summary").textContent = `当前显示 ${products.length} / ${state.catalog.products.length} 个型号，${state.catalog.parameters.length} 个参数项`;
   const drawerMeta = $("#drawerMeta");
   if (drawerMeta) {
@@ -142,10 +156,11 @@ function renderTable() {
       ? `${activeFilters} 个筛选条件 · 当前 ${products.length} 个型号`
       : `未启用筛选 · 当前 ${products.length} 个型号`;
   }
+  document.body.classList.toggle("editing-mode", canEdit);
   const colCount = Math.max(products.length, 1);
   let html = "";
   html += `<thead>`;
-  html += `<tr><th class="corner intro-label" colspan="3">产品名称</th>${productGroups.map((group) => `<th class="product-cell product-group-cell" colspan="${group.products.length}" style="--span:${group.products.length}"><div class="product-series">${escapeHtml(group.name)}</div></th>`).join("")}</tr>`;
+  html += `<tr><th class="corner intro-label" colspan="3">产品类型</th>${productGroups.map((group) => `<th class="product-cell product-group-cell" colspan="${group.products.length}" style="--span:${group.products.length}"><div class="product-series">${escapeHtml(group.name)}</div></th>`).join("")}</tr>`;
   html += `<tr><th class="sticky-left intro-label" colspan="3">产品图例</th>${products.map((product) => `<th class="product-cell"><div class="product-visual">${productImage(product)}</div></th>`).join("")}</tr>`;
   html += `<tr><th class="sticky-left intro-label" colspan="3">产品名称</th>${products.map((product) => `<th class="product-cell"><button class="linkish" data-edit-product="${product.id}">${escapeHtml(product.name)}</button></th>`).join("")}</tr>`;
   html += `<tr><th class="sticky-left intro-label" colspan="3">产品型号</th>${products.map((product) => `<th class="product-cell code">${escapeHtml(product.code)}</th>`).join("")}</tr>`;
@@ -207,22 +222,42 @@ async function restoreSession() {
 }
 
 function showLogin() {
-  $("#loginView").classList.remove("hidden");
+  // Reset to login tab
+  $("#loginDialog").showModal();
+  $$(".login-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === "login"));
+  $("#loginForm").classList.remove("hidden");
+  $("#registerForm").classList.add("hidden");
 }
 
 function showMain() {
-  $("#loginView").classList.add("hidden");
+  $("#loginDialog").close();
   $("#mainView").classList.remove("hidden");
   updateAuthUI();
 }
 
 function updateAuthUI() {
   const signedIn = Boolean(state.user);
-  $("#userBadge").textContent = signedIn
-    ? `${state.user.display_name} · ${state.user.role}`
-    : "访客模式 · 成本已隐藏";
   $("#loginBtn").classList.toggle("hidden", signedIn);
-  $("#logoutBtn").classList.toggle("hidden", !signedIn);
+  $("#avatarBtn").classList.toggle("hidden", !signedIn);
+  if (signedIn) {
+    const initial = (state.user.display_name || state.user.username || "?")[0];
+    $("#avatarInitial").textContent = initial;
+    // Show/hide admin entry
+    $("#adminEntryBtn").classList.toggle("hidden", state.user.role !== "admin");
+    // Show/hide data manage entry (visible for all logged-in users)
+    $("#dataManageBtn").classList.toggle("hidden", false);
+    // Update data manage label based on editMode
+    updateDataManageLabel();
+    closeAvatarMenu();
+  } else {
+    state.editMode = false;
+    document.body.classList.remove("editing-mode");
+  }
+}
+
+function updateDataManageLabel() {
+  $("#dataManageBtn").classList.toggle("active", state.editMode);
+  $("#dataManageBtn").textContent = state.editMode ? "📊 数据管理 ✏" : "📊 数据管理";
 }
 
 function openProductDialog(product = null) {
@@ -239,6 +274,50 @@ function openProductDialog(product = null) {
   form.sort_order.value = product?.sort_order || "";
   form.image_url.value = product?.image_url || "";
   $("#productDialog").showModal();
+}
+
+function openProductManage() {
+  $("#productManageForm").reset();
+  $("#productManageForm").id.value = "";
+  $("#productManageForm").code.disabled = false;
+  renderProductManageList();
+  $("#productManageDialog").showModal();
+}
+
+function renderProductManageList() {
+  if (!state.catalog) return;
+  $("#productManageList").innerHTML = state.catalog.products.map((product) => `
+    <article class="user-item">
+      <div>
+        <strong>${escapeHtml(product.name)}</strong>
+        <span>${escapeHtml(product.code)} · ${escapeHtml(product.series || "-")}</span>
+      </div>
+      <div class="user-actions">
+        <button type="button" data-edit-product="${product.id}">编辑</button>
+        <button type="button" data-delete-product="${product.id}">删除</button>
+      </div>
+    </article>
+  `).join("") || `<p class="muted">暂无产品</p>`;
+}
+
+async function saveManageProduct() {
+  const form = $("#productManageForm");
+  const data = Object.fromEntries(new FormData(form).entries());
+  if (!data.code.trim()) {
+    showMessage("产品型号不能为空", "error");
+    return;
+  }
+  if (data.id) {
+    await api(`/api/products/${data.id}`, { method: "PUT", body: JSON.stringify(data) });
+  } else {
+    await api("/api/products", { method: "POST", body: JSON.stringify(data) });
+  }
+  form.reset();
+  form.id.value = "";
+  form.code.disabled = false;
+  await loadCatalog();
+  renderProductManageList();
+  showMessage("产品已保存");
 }
 
 function openParameterDialog(parameter = null) {
@@ -266,6 +345,7 @@ async function saveProduct() {
   }
   $("#productDialog").close();
   await loadCatalog();
+  if ($("#productManageDialog").open) renderProductManageList();
   showMessage("产品已保存");
 }
 
@@ -539,45 +619,18 @@ async function submitUpload() {
   showMessage(`导入完成：${result.summary.values || 0} 个参数值`);
 }
 
-async function loadAudit() {
-  const data = await api("/api/audit");
-  $("#auditList").innerHTML = data.logs.map((log) => `
-    <article class="audit-item">
-      <strong>${escapeHtml(log.action)}</strong>
-      <span>${escapeHtml(log.target)} · ${escapeHtml(log.display_name || "系统")} · ${escapeHtml(log.created_at)}</span>
-      <code>${escapeHtml(log.detail)}</code>
-    </article>
-  `).join("") || `<p class="muted">暂无修改记录</p>`;
-  $("#auditDialog").showModal();
-}
-
-async function loadUsers() {
-  const data = await api("/api/users");
-  $("#usersList").innerHTML = data.users.map((user) => `
-    <article class="user-item">
-      <div>
-        <strong>${escapeHtml(user.display_name)}</strong>
-        <span>${escapeHtml(user.username)} · ${escapeHtml(user.role)}</span>
-      </div>
-      <div class="user-actions">
-        <button type="button" data-edit-user="${user.id}">编辑</button>
-        <button type="button" data-delete-user="${user.id}" ${state.user.id === user.id ? "disabled" : ""}>删除</button>
-      </div>
-    </article>
-  `).join("");
-  $("#usersList").dataset.users = JSON.stringify(data.users);
-  if (!$("#usersDialog").open) $("#usersDialog").showModal();
-}
-
 function renderTemplateList() {
   const groups = groupRows();
   $("#templateList").innerHTML = groups.map((group) => `
-    <section class="template-group">
-      <h3>${escapeHtml(group.name)}</h3>
+    <section class="template-group" data-group-id="${group.id}">
+      <h3 draggable="true">
+        <span class="template-group-drag-handle">⠿</span>
+        ${escapeHtml(group.name)}
+      </h3>
       ${group.parameters.map((parameter) => `
         <article class="template-item" draggable="true" data-param-id="${parameter.id}" data-group-id="${group.id}">
           <div class="template-item-left">
-            <span class="template-drag-handle" title="拖拽排序">⠿</span>
+            <span class="template-drag-handle">⠿</span>
             <div>
               <strong>${escapeHtml(parameter.name)}</strong>
               <span>${escapeHtml(parameter.unit || "-")} · ${escapeHtml(parameter.data_type || "text")} · ${parameter.filterable ? "可筛选" : "不可筛选"} · #${escapeHtml(parameter.sort_order || 0)}</span>
@@ -598,19 +651,125 @@ function openTemplateDialog() {
   $("#templateDialog").showModal();
 }
 
-async function saveUser() {
-  const form = $("#userForm");
-  const data = Object.fromEntries(new FormData(form).entries());
-  if (!data.password && !data.id) {
-    showMessage("新增用户需要填写密码", "error");
-    return;
+// --- Avatar menu helpers ---
+function closeAvatarMenu() {
+  $("#avatarMenu").classList.add("hidden");
+}
+
+function openProfile() {
+  if (!state.user) return;
+  const f = $("#profileForm");
+  f.username.value = state.user.username;
+  f.display_name.value = state.user.display_name || "";
+  f.role.value = state.user.role || "";
+  f.password.value = "";
+  $("#profileDialog").showModal();
+}
+
+// --- Admin panel ---
+function showAdminPanel() {
+  $("#mainView").classList.add("hidden");
+  $("#adminView").classList.remove("hidden");
+  loadAdminUsers();
+}
+
+function hideAdminPanel() {
+  $("#adminView").classList.add("hidden");
+  $("#mainView").classList.remove("hidden");
+}
+
+async function loadAdminUsers() {
+  let selectedGroupId = $("#adminView").dataset.selectedGroup || "";
+  const groupData = await api("/api/user-groups");
+  state.userGroups = groupData.groups;
+  renderAdminGroups();
+  if (!selectedGroupId && state.userGroups.length > 0) {
+    selectedGroupId = String(state.userGroups[0].id);
+    $("#adminView").dataset.selectedGroup = selectedGroupId;
   }
+  $("#adminGroupLabel").textContent = selectedGroupId
+    ? `— ${(state.userGroups.find(g => String(g.id) === selectedGroupId) || {}).name || ""}`
+    : "";
+  const data = await api("/api/users");
+  let users = data.users;
+  if (selectedGroupId) {
+    users = users.filter(u => String(u.group_id) === selectedGroupId);
+  }
+  renderAdminUserList(users);
+}
+
+function renderAdminGroups() {
+  const groups = state.userGroups || [];
+  const selected = $("#adminView").dataset.selectedGroup || "";
+  $("#adminUserGroupsList").innerHTML = groups.map(group => `
+    <article class="user-item ${String(group.id) === selected ? "selected" : ""}" data-group-id="${group.id}">
+      <div><strong>${escapeHtml(group.name)}</strong><span>${escapeHtml(group.description || "")}</span></div>
+      <div class="user-actions">
+        <button type="button" data-edit-group="${group.id}">编辑</button>
+        <button type="button" data-delete-group="${group.id}">删除</button>
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderAdminUserList(users) {
+  $("#adminUsersList").innerHTML = users.map(user => `
+    <article class="user-item">
+      <div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.username)} · ${escapeHtml(user.role)}</span></div>
+      <div class="user-actions">
+        <button type="button" data-edit-user="${user.id}">编辑</button>
+        <button type="button" data-delete-user="${user.id}" ${state.user && state.user.id === user.id ? "disabled" : ""}>删除</button>
+      </div>
+    </article>
+  `).join("");
+  $("#adminUsersList").dataset.users = JSON.stringify(users);
+}
+
+async function saveAdminUserGroup() {
+  const form = $("#adminUserGroupForm");
+  const data = Object.fromEntries(new FormData(form).entries());
+  if (!data.name.trim()) { showMessage("用户组名称不能为空", "error"); return; }
+  const method = data.id ? "PUT" : "POST";
+  const path = data.id ? `/api/user-groups/${data.id}` : "/api/user-groups";
+  await api(path, { method, body: JSON.stringify(data) });
+  form.reset();
+  await loadAdminUsers();
+  showMessage("用户组已保存");
+}
+
+async function saveAdminUser() {
+  const form = $("#adminUserForm");
+  const data = Object.fromEntries(new FormData(form).entries());
+  if (!data.password && !data.id) { showMessage("新增用户需要填写密码", "error"); return; }
+  const selectedGroup = $("#adminView").dataset.selectedGroup || "";
+  if (selectedGroup) data.group_id = Number(selectedGroup);
   const method = data.id ? "PUT" : "POST";
   const path = data.id ? `/api/users/${data.id}` : "/api/users";
   await api(path, { method, body: JSON.stringify(data) });
   form.reset();
-  await loadUsers();
+  await loadAdminUsers();
   showMessage("用户已保存");
+}
+
+async function loadAdminSettings() {
+  const data = await api("/api/settings");
+  const s = data.settings;
+  $("#adminSettingsForm").smtp_host.value = s.smtp_host || "";
+  $("#adminSettingsForm").smtp_port.value = s.smtp_port || "";
+  $("#adminSettingsForm").smtp_user.value = s.smtp_user || "";
+  $("#adminSettingsForm").smtp_pass.value = s.smtp_pass || "";
+  $("#adminSettingsForm").smtp_sender.value = s.smtp_sender || "";
+}
+
+async function loadAdminAudit() {
+  const data = await api("/api/audit");
+  $("#adminAuditList").innerHTML = data.logs.map(log => `
+    <article class="audit-item">
+      <strong>${escapeHtml(log.action)}</strong>
+      <span>${escapeHtml(log.target)} · ${escapeHtml(log.display_name || "系统")} · ${escapeHtml(log.created_at)}</span>
+      <code>${escapeHtml(log.detail)}</code>
+    </article>
+  `).join("") || `<p class="muted">暂无修改记录</p>`;
 }
 
 function bindEvents() {
@@ -632,39 +791,178 @@ function bindEvents() {
   });
   $("#loginBtn").addEventListener("click", () => showLogin());
   $("#guestBtn").addEventListener("click", () => showMain());
-  $("#logoutBtn").addEventListener("click", async () => {
-    await api("/api/logout", { method: "POST", body: JSON.stringify({}) }).catch(() => {});
-    localStorage.removeItem("psl_token");
-    state.token = "";
-    state.user = null;
-    showMain();
-    await loadCatalog();
+  $("#closeLoginBtn").addEventListener("click", () => showMain());
+
+  // --- Login / Register tabs ---
+  $$(".login-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      $$(".login-tab").forEach(t => t.classList.toggle("active", t === tab));
+      $("#loginForm").classList.toggle("hidden", tab.dataset.tab !== "login");
+      $("#registerForm").classList.toggle("hidden", tab.dataset.tab !== "register");
+    });
   });
-  $("#refreshBtn").addEventListener("click", () => loadCatalog().then(() => showMessage("已刷新")));
-  $("#addProductBtn").addEventListener("click", () => openProductDialog());
-  $("#uploadBtn").addEventListener("click", () => $("#uploadDialog").showModal());
-  $("#auditBtn").addEventListener("click", () => loadAudit().catch((error) => showMessage(error.message, "error")));
-  $("#usersBtn").addEventListener("click", () => loadUsers().catch((error) => showMessage(error.message, "error")));
-  $("#templateBtn").addEventListener("click", () => openTemplateDialog());
-  $("#templateAddParamBtn").addEventListener("click", () => openParameterDialog());
-  $("#closeProductBtn").addEventListener("click", () => $("#productDialog").close());
-  $("#cancelProductBtn").addEventListener("click", () => $("#productDialog").close());
-  $("#closeParamBtn").addEventListener("click", () => $("#paramDialog").close());
-  $("#cancelParamBtn").addEventListener("click", () => $("#paramDialog").close());
-  $("#closeAuditBtn").addEventListener("click", () => $("#auditDialog").close());
-  $("#closeUsersBtn").addEventListener("click", () => $("#usersDialog").close());
-  $("#closeTemplateBtn").addEventListener("click", () => $("#templateDialog").close());
-  $("#saveProductBtn").addEventListener("click", () => saveProduct().catch((error) => showMessage(error.message, "error")));
-  $("#saveParamBtn").addEventListener("click", () => saveParameter().catch((error) => showMessage(error.message, "error")));
-  $("#saveUserBtn").addEventListener("click", () => saveUser().catch((error) => showMessage(error.message, "error")));
-  $("#submitUploadBtn").addEventListener("click", () => submitUpload().catch((error) => showMessage(error.message, "error")));
-  $("#usersList").addEventListener("click", async (event) => {
+
+  // --- Send email verification code ---
+  let codeCooldown = 0;
+  let codeTimer = null;
+  $("#sendCodeBtn").addEventListener("click", async () => {
+    if (codeCooldown > 0) return;
+    const email = $("#registerForm").email.value.trim();
+    if (!email || !email.includes("@") || !email.includes(".")) {
+      showMessage("请输入有效的邮箱地址", "error");
+      return;
+    }
+    try {
+      $("#sendCodeBtn").disabled = true;
+      await api("/api/send-register-code", { method: "POST", body: JSON.stringify({ email }), headers: {} });
+      showMessage("验证码已发送，请查收邮件");
+      codeCooldown = 60;
+      $("#sendCodeBtn").textContent = `${codeCooldown}s 后重发`;
+      codeTimer = setInterval(() => {
+        codeCooldown -= 1;
+        if (codeCooldown <= 0) {
+          clearInterval(codeTimer);
+          codeTimer = null;
+          $("#sendCodeBtn").textContent = "发送验证码";
+          $("#sendCodeBtn").disabled = false;
+        } else {
+          $("#sendCodeBtn").textContent = `${codeCooldown}s 后重发`;
+        }
+      }, 1000);
+    } catch (error) {
+      showMessage(error.message, "error");
+      $("#sendCodeBtn").disabled = false;
+    }
+  });
+
+  // --- Register form ---
+  $("#registerForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    if (!payload.email || !payload.code || !payload.username || !payload.display_name || !payload.password) {
+      showMessage("请填写所有字段", "error");
+      return;
+    }
+    if (payload.password.length < 6) {
+      showMessage("密码至少 6 位", "error");
+      return;
+    }
+    try {
+      const data = await api("/api/register", { method: "POST", body: JSON.stringify(payload), headers: {} });
+      state.token = data.token;
+      state.user = data.user;
+      localStorage.setItem("psl_token", state.token);
+      showMain();
+      await loadCatalog();
+      showMessage("注册成功，已自动登录");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  });
+  // --- Avatar dropdown ---
+  $("#avatarBtn").addEventListener("click", () => {
+    $("#avatarMenu").classList.toggle("hidden");
+  });
+  document.addEventListener("click", (event) => {
+    if (!$("#avatarMenu").classList.contains("hidden") && !event.target.closest("#avatarBtn") && !event.target.closest("#avatarMenu")) {
+      closeAvatarMenu();
+    }
+  });
+  // Avatar menu actions
+  $("#avatarMenu").addEventListener("click", async (event) => {
+    const action = event.target.closest("button")?.dataset.action;
+    if (!action) return;
+    closeAvatarMenu();
+    if (action === "profile") openProfile();
+    else if (action === "dataManage") {
+      state.editMode = !state.editMode;
+      updateDataManageLabel();
+      document.body.classList.toggle("editing-mode", state.editMode);
+      await loadCatalog();
+      showMessage(state.editMode ? "数据管理已开启，表格可编辑" : "数据管理已关闭");
+    }
+    else if (action === "admin") showAdminPanel();
+    else if (action === "logout") {
+      await api("/api/logout", { method: "POST", body: JSON.stringify({}) }).catch(() => {});
+      localStorage.removeItem("psl_token");
+      state.token = "";
+      state.user = null;
+      state.editMode = false;
+      document.body.classList.remove("editing-mode");
+      showMain();
+      await loadCatalog();
+    }
+  });
+  // --- Profile dialog ---
+  $("#closeProfileBtn").addEventListener("click", () => $("#profileDialog").close());
+  $("#cancelProfileBtn").addEventListener("click", () => $("#profileDialog").close());
+  $("#profileForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    if (!payload.display_name.trim()) { showMessage("显示名不能为空", "error"); return; }
+    const body = { display_name: payload.display_name.trim() };
+    if (payload.password) body.password = payload.password;
+    try {
+      const data = await api(`/api/users/${state.user.id}`, { method: "PUT", body: JSON.stringify(body) });
+      state.user.display_name = body.display_name;
+      updateAuthUI();
+      $("#profileDialog").close();
+      showMessage("个人资料已更新");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  });
+  // --- Admin panel ---
+  $("#backToMainBtn").addEventListener("click", hideAdminPanel);
+  $$(".admin-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      $$(".admin-tab").forEach(t => t.classList.toggle("active", t === tab));
+      $$("#adminView .admin-content").forEach(p => p.classList.toggle("hidden", p.id !== `admin${tab.dataset.tab.charAt(0).toUpperCase() + tab.dataset.tab.slice(1)}Panel`));
+      if (tab.dataset.tab === "settings") loadAdminSettings();
+      else if (tab.dataset.tab === "audit") loadAdminAudit();
+    });
+  });
+  // Admin user group save
+  $("#adminSaveGroupBtn").addEventListener("click", () => saveAdminUserGroup().catch(e => showMessage(e.message, "error")));
+  // Admin user save
+  $("#adminSaveUserBtn").addEventListener("click", () => saveAdminUser().catch(e => showMessage(e.message, "error")));
+  // Admin user group list: select/edit/delete
+  $("#adminUserGroupsList").addEventListener("click", async (event) => {
+    const groupEl = event.target.closest("[data-group-id]");
+    const edit = event.target.closest("[data-edit-group]");
+    const remove = event.target.closest("[data-delete-group]");
+    if (edit) {
+      const group = (state.userGroups || []).find(g => g.id === Number(edit.dataset.editGroup));
+      if (group) {
+        const form = $("#adminUserGroupForm");
+        form.id.value = group.id;
+        form.name.value = group.name;
+        form.description.value = group.description || "";
+        $("#adminSaveGroupBtn").textContent = "更新用户组";
+      }
+      return;
+    }
+    if (remove && window.confirm("确认删除该用户组？")) {
+      await api(`/api/user-groups/${remove.dataset.deleteGroup}`, { method: "DELETE" });
+      $("#adminUserGroupForm").reset();
+      $("#adminSaveGroupBtn").textContent = "新增用户组";
+      await loadAdminUsers();
+      showMessage("用户组已删除");
+    }
+    if (groupEl && !edit && !remove) {
+      $("#adminView").dataset.selectedGroup = groupEl.dataset.groupId;
+      await loadAdminUsers();
+    }
+  });
+  $("#adminUserGroupForm").addEventListener("reset", () => { $("#adminSaveGroupBtn").textContent = "新增用户组"; });
+  // Admin user list: edit/delete
+  $("#adminUsersList").addEventListener("click", async (event) => {
     const edit = event.target.closest("[data-edit-user]");
     const remove = event.target.closest("[data-delete-user]");
-    const users = JSON.parse($("#usersList").dataset.users || "[]");
+    const users = JSON.parse($("#adminUsersList").dataset.users || "[]");
     if (edit) {
-      const user = users.find((item) => item.id === Number(edit.dataset.editUser));
-      const form = $("#userForm");
+      const user = users.find(u => u.id === Number(edit.dataset.editUser));
+      const form = $("#adminUserForm");
       form.id.value = user.id;
       form.username.value = user.username;
       form.username.disabled = true;
@@ -674,13 +972,52 @@ function bindEvents() {
     }
     if (remove && window.confirm("确认删除该用户？")) {
       await api(`/api/users/${remove.dataset.deleteUser}`, { method: "DELETE" });
-      await loadUsers();
+      await loadAdminUsers();
       showMessage("用户已删除");
     }
   });
-  $("#userForm").addEventListener("reset", () => {
-    $("#userForm").username.disabled = false;
+  $("#adminUserForm").addEventListener("reset", () => { $("#adminUserForm").username.disabled = false; });
+  // Admin settings save
+  $("#adminSettingsForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try {
+      await api("/api/settings", { method: "PUT", body: JSON.stringify(payload), headers: {} });
+      showMessage("设置已保存", "success");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
   });
+
+  $("#refreshBtn").addEventListener("click", () => loadCatalog().then(() => showMessage("已刷新")));
+  $("#addProductBtn").addEventListener("click", () => openProductManage());
+  $("#uploadBtn").addEventListener("click", () => $("#uploadDialog").showModal());
+  $("#templateBtn").addEventListener("click", () => openTemplateDialog());
+  $("#templateAddParamBtn").addEventListener("click", () => openParameterDialog());
+  $("#closeProductBtn").addEventListener("click", () => $("#productDialog").close());
+  $("#cancelProductBtn").addEventListener("click", () => $("#productDialog").close());
+  $("#closeParamBtn").addEventListener("click", () => $("#paramDialog").close());
+  $("#cancelParamBtn").addEventListener("click", () => $("#paramDialog").close());
+  $("#closeTemplateBtn").addEventListener("click", () => $("#templateDialog").close());
+  $("#saveProductBtn").addEventListener("click", () => saveProduct().catch((error) => showMessage(error.message, "error")));
+  $("#closeProductManageBtn").addEventListener("click", () => $("#productManageDialog").close());
+  $("#saveManageProductBtn").addEventListener("click", () => saveManageProduct().catch((error) => showMessage(error.message, "error")));
+  $("#productManageList").addEventListener("click", async (event) => {
+    const edit = event.target.closest("[data-edit-product]");
+    const remove = event.target.closest("[data-delete-product]");
+    if (edit) {
+      const product = state.catalog.products.find((item) => item.id === Number(edit.dataset.editProduct));
+      if (product) openProductDialog(product);
+    }
+    if (remove && window.confirm(`确认删除产品 ${remove.closest(".user-item").querySelector("strong").textContent}？相关参数值也会一并删除。`)) {
+      await api(`/api/products/${remove.dataset.deleteProduct}`, { method: "DELETE" });
+      await loadCatalog();
+      renderProductManageList();
+      showMessage("产品已删除");
+    }
+  });
+  $("#saveParamBtn").addEventListener("click", () => saveParameter().catch((error) => showMessage(error.message, "error")));
+  $("#submitUploadBtn").addEventListener("click", () => submitUpload().catch((error) => showMessage(error.message, "error")));
   $("#templateList").addEventListener("click", async (event) => {
     const edit = event.target.closest("[data-edit-param]");
     const remove = event.target.closest("[data-delete-param]");
@@ -696,67 +1033,116 @@ function bindEvents() {
     }
   });
 
-  // --- template drag-sort ---
+  // --- template drag-sort (groups + parameters) ---
   let templateDragSource = null;
+  let templateDragType = null; // 'group' | 'param'
 
   $("#templateList").addEventListener("dragstart", (event) => {
-    const item = event.target.closest(".template-item");
-    if (!item) return;
-    templateDragSource = item;
-    item.classList.add("dragging");
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", "");
+    // Check group header: drag from h3 inside .template-group
+    const h3 = event.target.closest("h3");
+    if (h3 && h3.closest(".template-group")) {
+      const groupEl = h3.closest(".template-group");
+      templateDragSource = groupEl;
+      templateDragType = "group";
+      groupEl.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", groupEl.dataset.groupId);
+      return;
+    }
+    // Check parameter row: drag from .template-item (but not buttons)
+    const paramEl = event.target.closest(".template-item");
+    if (paramEl && !event.target.closest("button")) {
+      templateDragSource = paramEl;
+      templateDragType = "param";
+      paramEl.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", paramEl.dataset.paramId);
+      return;
+    }
+    event.preventDefault();
   });
 
-  $("#templateList").addEventListener("dragend", (event) => {
-    const item = event.target.closest(".template-item");
-    if (item) item.classList.remove("dragging");
+  $("#templateList").addEventListener("dragend", () => {
+    if (templateDragSource) templateDragSource.classList.remove("dragging");
     templateDragSource = null;
-    $$("#templateList .template-item").forEach((el) => el.classList.remove("drag-over"));
+    templateDragType = null;
+    $$("#templateList .drag-over").forEach((el) => el.classList.remove("drag-over"));
   });
 
   $("#templateList").addEventListener("dragover", (event) => {
     event.preventDefault();
+    if (!templateDragType) return;
     event.dataTransfer.dropEffect = "move";
-  });
-
-  $("#templateList").addEventListener("dragenter", (event) => {
-    const item = event.target.closest(".template-item");
-    if (item && item !== templateDragSource) {
-      item.classList.add("drag-over");
+    // Clear all highlights, then set on current target
+    $$("#templateList .drag-over").forEach((el) => el.classList.remove("drag-over"));
+    if (templateDragType === "group") {
+      const groupEl = event.target.closest(".template-group");
+      if (groupEl && groupEl !== templateDragSource) groupEl.classList.add("drag-over");
+    } else if (templateDragType === "param") {
+      const paramEl = event.target.closest(".template-item");
+      if (paramEl && paramEl !== templateDragSource && paramEl.dataset.groupId === templateDragSource.dataset.groupId) {
+        paramEl.classList.add("drag-over");
+      }
     }
-  });
-
-  $("#templateList").addEventListener("dragleave", (event) => {
-    const item = event.target.closest(".template-item");
-    if (item) item.classList.remove("drag-over");
   });
 
   $("#templateList").addEventListener("drop", async (event) => {
     event.preventDefault();
-    const target = event.target.closest(".template-item");
-    if (!target || !templateDragSource || target === templateDragSource) return;
-    const group = target.closest(".template-group");
-    const siblings = Array.from(group.querySelectorAll(".template-item"));
-    const newIndex = siblings.indexOf(target);
-    const paramId = Number(templateDragSource.dataset.paramId);
-    const targetParam = state.catalog.parameters.find((p) => p.id === Number(target.dataset.paramId));
-    const newSort = targetParam ? targetParam.sort_order : (newIndex + 1) * 10;
-    try {
-      await api(`/api/parameters/${paramId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
-      // renumber all siblings sequentially after the move
-      const ordered = siblings.map((el) => Number(el.dataset.paramId));
-      const movedIndex = ordered.indexOf(paramId);
-      if (movedIndex >= 0) ordered.splice(movedIndex, 1);
-      ordered.splice(newIndex, 0, paramId);
-      await Promise.all(ordered.map((id, i) =>
-        api(`/api/parameters/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
-      ));
-      await loadCatalog();
-      renderTemplateList();
-      showMessage("排序已保存");
-    } catch (error) {
-      showMessage(error.message, "error");
+    if (!templateDragSource || !templateDragType) return;
+
+    if (templateDragType === "group") {
+      const target = event.target.closest(".template-group");
+      if (!target || target === templateDragSource) return;
+      const allGroups = $$("#templateList .template-group");
+      const groupId = Number(templateDragSource.dataset.groupId);
+      const targetGroupId = Number(target.dataset.groupId);
+      const targetGroup = state.catalog.groups.find((g) => g.id === targetGroupId);
+      const newSort = targetGroup ? targetGroup.sort_order : 10;
+      try {
+        await api(`/api/groups/${groupId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
+        const ordered = allGroups.map((el) => Number(el.dataset.groupId));
+        const movedIndex = ordered.indexOf(groupId);
+        const newIndex = ordered.indexOf(targetGroupId);
+        if (movedIndex >= 0) ordered.splice(movedIndex, 1);
+        ordered.splice(newIndex, 0, groupId);
+        await Promise.all(ordered.map((id, i) =>
+          api(`/api/groups/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
+        ));
+        await loadCatalog();
+        renderTemplateList();
+        showMessage("分组排序已保存");
+      } catch (error) {
+        showMessage(error.message, "error");
+      }
+      return;
+    }
+
+    if (templateDragType === "param") {
+      const target = event.target.closest(".template-item");
+      if (!target || target === templateDragSource) return;
+      // Only allow drag within the same group
+      if (target.dataset.groupId !== templateDragSource.dataset.groupId) return;
+      const group = target.closest(".template-group");
+      const siblings = Array.from(group.querySelectorAll(".template-item"));
+      const paramId = Number(templateDragSource.dataset.paramId);
+      const newIndex = siblings.indexOf(target);
+      const targetParam = state.catalog.parameters.find((p) => p.id === Number(target.dataset.paramId));
+      const newSort = targetParam ? targetParam.sort_order : (newIndex + 1) * 10;
+      try {
+        await api(`/api/parameters/${paramId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
+        const ordered = siblings.map((el) => Number(el.dataset.paramId));
+        const movedIndex = ordered.indexOf(paramId);
+        if (movedIndex >= 0) ordered.splice(movedIndex, 1);
+        ordered.splice(newIndex, 0, paramId);
+        await Promise.all(ordered.map((id, i) =>
+          api(`/api/parameters/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
+        ));
+        await loadCatalog();
+        renderTemplateList();
+        showMessage("参数排序已保存");
+      } catch (error) {
+        showMessage(error.message, "error");
+      }
     }
   });
   // --- end template drag-sort ---
@@ -851,6 +1237,24 @@ function bindEvents() {
       state.filters[key] = event.target.value;
       renderTable();
     });
+  });
+
+  // --- Image lightbox ---
+  $("#selectionTable").addEventListener("click", (event) => {
+    const img = event.target.closest(".product-visual img");
+    if (img) {
+      event.preventDefault();
+      openLightbox(img);
+    }
+  });
+  $("#lightboxClose").addEventListener("click", closeLightbox);
+  $("#lightboxOverlay").addEventListener("click", (event) => {
+    if (event.target === $("#lightboxOverlay")) closeLightbox();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#lightboxOverlay").hasAttribute("hidden")) {
+      closeLightbox();
+    }
   });
 }
 
