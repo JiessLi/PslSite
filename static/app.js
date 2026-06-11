@@ -445,17 +445,6 @@ function selectionToClipboardTable() {
   return rows.join("\n");
 }
 
-async function copyFromSelection() {
-  const text = selectionToClipboardTable();
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-    showMessage(`已复制选取的单元格`);
-  } catch {
-    showMessage("复制失败，请检查浏览器权限", "error");
-  }
-}
-
 async function deleteSelection() {
   if (!roleCanEdit()) return;
   const bounds = selectedBounds();
@@ -734,30 +723,40 @@ function bindEvents() {
       if (!state.selection.anchor) return;
       event.preventDefault();
       deleteSelection();
-      return;
     }
-    // Ctrl+C — copy selected cells
-    if ((event.ctrlKey || event.metaKey) && event.key === "c" && !editingInput) {
-      if (!state.selection.anchor) return;
-      event.preventDefault();
-      copyFromSelection();
-      return;
-    }
-    // Ctrl+X — cut (copy + delete) selected cells
-    if ((event.ctrlKey || event.metaKey) && event.key === "x" && !editingInput) {
-      if (!state.selection.anchor) return;
-      event.preventDefault();
-      copyFromSelection().then(() => deleteSelection());
-      return;
-    }
-    // Ctrl+V — paste into selection
-    if ((event.ctrlKey || event.metaKey) && event.key === "v" && !editingInput) {
-      event.preventDefault();
-      navigator.clipboard.readText().then((text) => {
-        if (text && state.selection.anchor) pasteIntoSelection(text);
-      }).catch(() => {});
-      return;
-    }
+  });
+
+  // Copy — handled via native copy event (not keydown) so event.clipboardData works
+  document.addEventListener("copy", (event) => {
+    if (event.target.closest && event.target.closest("input, textarea, select")) return;
+    if (!state.selection.anchor) return;
+    const text = selectionToClipboardTable();
+    if (!text) return;
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+    showMessage("已复制选取的单元格");
+  });
+
+  // Cut — copy to clipboard then delete
+  document.addEventListener("cut", (event) => {
+    if (event.target.closest && event.target.closest("input, textarea, select")) return;
+    if (!state.selection.anchor) return;
+    if (!roleCanEdit()) return;
+    const text = selectionToClipboardTable();
+    if (!text) return;
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+    deleteSelection();
+  });
+
+  // Paste — handled via native paste event so event.clipboardData works
+  document.addEventListener("paste", (event) => {
+    if (event.target.closest && event.target.closest("input, textarea, select")) return;
+    if (!roleCanEdit()) return;
+    const text = event.clipboardData?.getData("text/plain") || "";
+    if (!text || !state.selection.anchor) return;
+    event.preventDefault();
+    pasteIntoSelection(text);
   });
   $("#selectionTable").addEventListener("dblclick", (event) => {
     const cell = event.target.closest(".value-cell");
