@@ -430,6 +430,70 @@ function parseClipboardTable(text) {
     .map((line) => line.split("\t"));
 }
 
+function selectionToClipboardTable() {
+  const bounds = selectedBounds();
+  if (!bounds) return "";
+  const rows = [];
+  for (let r = bounds.rowMin; r <= bounds.rowMax; r++) {
+    const rowValues = [];
+    for (let c = bounds.colMin; c <= bounds.colMax; c++) {
+      const cell = $(`.value-cell.editable[data-row="${r}"][data-col="${c}"]`);
+      rowValues.push(cell ? (cell.textContent === "-" ? "" : cell.textContent) : "");
+    }
+    rows.push(rowValues.join("\t"));
+  }
+  return rows.join("\n");
+}
+
+async function copyFromSelection() {
+  const text = selectionToClipboardTable();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    showMessage(`已复制选取的单元格`);
+  } catch {
+    showMessage("复制失败，请检查浏览器权限", "error");
+  }
+}
+
+async function deleteSelection() {
+  if (!roleCanEdit()) return;
+  const bounds = selectedBounds();
+  if (!bounds) return;
+  const cells = [];
+  for (let r = bounds.rowMin; r <= bounds.rowMax; r++) {
+    for (let c = bounds.colMin; c <= bounds.colMax; c++) {
+      const cell = $(`.value-cell.editable[data-row="${r}"][data-col="${c}"]`);
+      if (cell && cell.textContent !== "-" && cell.textContent !== "") {
+        cells.push(cell);
+      }
+    }
+  }
+  if (!cells.length) return;
+  cells.forEach((cell) => cell.classList.add("saving"));
+  try {
+    await Promise.all(cells.map((cell) =>
+      api(`/api/values/${cell.dataset.productId}/${cell.dataset.parameterId}`, {
+        method: "PUT",
+        body: JSON.stringify({ display_value: "" }),
+      }).then(() => {
+        const key = `${cell.dataset.productId}:${cell.dataset.parameterId}`;
+        state.catalog.values[key] = {
+          product_id: Number(cell.dataset.productId),
+          parameter_id: Number(cell.dataset.parameterId),
+          display_value: "",
+          numeric_value: null,
+        };
+      })
+    ));
+    renderTable();
+    showMessage(`已清空 ${cells.length} 个单元格`);
+  } catch (error) {
+    cells.forEach((cell) => cell.classList.remove("saving"));
+    showMessage(error.message, "error");
+  }
+}
+
 async function pasteIntoSelection(text) {
   if (!roleCanEdit()) return;
   const data = parseClipboardTable(text);
@@ -663,13 +727,37 @@ function bindEvents() {
   document.addEventListener("mouseup", () => {
     isSelecting = false;
   });
-  document.addEventListener("paste", (event) => {
-    if (!roleCanEdit()) return;
-    if (event.target.closest && event.target.closest("input, textarea, select, dialog")) return;
-    const text = event.clipboardData?.getData("text/plain") || "";
-    if (!text || !state.selection.anchor) return;
-    event.preventDefault();
-    pasteIntoSelection(text);
+  document.addEventListener("keydown", (event) => {
+    const editingInput = event.target.closest && event.target.closest("input, textarea, select");
+    // Delete / Backspace — batch clear selected cells
+    if ((event.key === "Delete" || event.key === "Backspace") && !editingInput) {
+      if (!state.selection.anchor) return;
+      event.preventDefault();
+      deleteSelection();
+      return;
+    }
+    // Ctrl+C — copy selected cells
+    if ((event.ctrlKey || event.metaKey) && event.key === "c" && !editingInput) {
+      if (!state.selection.anchor) return;
+      event.preventDefault();
+      copyFromSelection();
+      return;
+    }
+    // Ctrl+X — cut (copy + delete) selected cells
+    if ((event.ctrlKey || event.metaKey) && event.key === "x" && !editingInput) {
+      if (!state.selection.anchor) return;
+      event.preventDefault();
+      copyFromSelection().then(() => deleteSelection());
+      return;
+    }
+    // Ctrl+V — paste into selection
+    if ((event.ctrlKey || event.metaKey) && event.key === "v" && !editingInput) {
+      event.preventDefault();
+      navigator.clipboard.readText().then((text) => {
+        if (text && state.selection.anchor) pasteIntoSelection(text);
+      }).catch(() => {});
+      return;
+    }
   });
   $("#selectionTable").addEventListener("dblclick", (event) => {
     const cell = event.target.closest(".value-cell");
