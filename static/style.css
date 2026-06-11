@@ -809,6 +809,42 @@ dialog::backdrop {
   gap: 12px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
+  transition: background .15s ease, box-shadow .15s ease;
+}
+
+.template-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.template-drag-handle {
+  cursor: grab;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 16px;
+  user-select: none;
+  flex-shrink: 0;
+  transition: color .12s ease;
+}
+
+.template-drag-handle:hover {
+  color: var(--brand);
+}
+
+.template-item.dragging {
+  opacity: .36;
+}
+
+.template-item.drag-over {
+  background: rgba(15, 118, 107, .08);
+  box-shadow: inset 0 2px 0 var(--brand), inset 0 -2px 0 var(--brand);
 }
 
 .template-item:last-child {

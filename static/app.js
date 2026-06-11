@@ -575,10 +575,13 @@ function renderTemplateList() {
     <section class="template-group">
       <h3>${escapeHtml(group.name)}</h3>
       ${group.parameters.map((parameter) => `
-        <article class="template-item">
-          <div>
-            <strong>${escapeHtml(parameter.name)}</strong>
-            <span>${escapeHtml(parameter.unit || "-")} · ${escapeHtml(parameter.data_type || "text")} · ${parameter.filterable ? "可筛选" : "不可筛选"} · #${escapeHtml(parameter.sort_order || 0)}</span>
+        <article class="template-item" draggable="true" data-param-id="${parameter.id}" data-group-id="${group.id}">
+          <div class="template-item-left">
+            <span class="template-drag-handle" title="拖拽排序">⠿</span>
+            <div>
+              <strong>${escapeHtml(parameter.name)}</strong>
+              <span>${escapeHtml(parameter.unit || "-")} · ${escapeHtml(parameter.data_type || "text")} · ${parameter.filterable ? "可筛选" : "不可筛选"} · #${escapeHtml(parameter.sort_order || 0)}</span>
+            </div>
           </div>
           <div class="template-actions">
             <button type="button" data-edit-param="${parameter.id}">编辑</button>
@@ -692,6 +695,72 @@ function bindEvents() {
       showMessage("参数模板已删除");
     }
   });
+
+  // --- template drag-sort ---
+  let templateDragSource = null;
+
+  $("#templateList").addEventListener("dragstart", (event) => {
+    const item = event.target.closest(".template-item");
+    if (!item) return;
+    templateDragSource = item;
+    item.classList.add("dragging");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", "");
+  });
+
+  $("#templateList").addEventListener("dragend", (event) => {
+    const item = event.target.closest(".template-item");
+    if (item) item.classList.remove("dragging");
+    templateDragSource = null;
+    $$("#templateList .template-item").forEach((el) => el.classList.remove("drag-over"));
+  });
+
+  $("#templateList").addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  });
+
+  $("#templateList").addEventListener("dragenter", (event) => {
+    const item = event.target.closest(".template-item");
+    if (item && item !== templateDragSource) {
+      item.classList.add("drag-over");
+    }
+  });
+
+  $("#templateList").addEventListener("dragleave", (event) => {
+    const item = event.target.closest(".template-item");
+    if (item) item.classList.remove("drag-over");
+  });
+
+  $("#templateList").addEventListener("drop", async (event) => {
+    event.preventDefault();
+    const target = event.target.closest(".template-item");
+    if (!target || !templateDragSource || target === templateDragSource) return;
+    const group = target.closest(".template-group");
+    const siblings = Array.from(group.querySelectorAll(".template-item"));
+    const newIndex = siblings.indexOf(target);
+    const paramId = Number(templateDragSource.dataset.paramId);
+    const targetParam = state.catalog.parameters.find((p) => p.id === Number(target.dataset.paramId));
+    const newSort = targetParam ? targetParam.sort_order : (newIndex + 1) * 10;
+    try {
+      await api(`/api/parameters/${paramId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
+      // renumber all siblings sequentially after the move
+      const ordered = siblings.map((el) => Number(el.dataset.paramId));
+      const movedIndex = ordered.indexOf(paramId);
+      if (movedIndex >= 0) ordered.splice(movedIndex, 1);
+      ordered.splice(newIndex, 0, paramId);
+      await Promise.all(ordered.map((id, i) =>
+        api(`/api/parameters/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
+      ));
+      await loadCatalog();
+      renderTemplateList();
+      showMessage("排序已保存");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  });
+  // --- end template drag-sort ---
+
   $("#selectionTable").addEventListener("mousedown", (event) => {
     const cell = event.target.closest(".value-cell.editable");
     if (!cell || event.button !== 0) return;
