@@ -582,6 +582,25 @@ select:focus {
   background: rgba(246, 252, 251, .96) !important;
 }
 
+/* Selection highlight — like Excel range selection */
+.value-cell.selected {
+  outline: 2px solid rgba(15, 118, 107, .42);
+  outline-offset: -2px;
+  background: rgba(15, 118, 107, .08) !important;
+}
+
+.value-cell.selection-anchor {
+  background: rgba(15, 118, 107, .18) !important;
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
+.value-cell.selection-anchor.selected {
+  background: rgba(15, 118, 107, .22) !important;
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
 .value-cell.editing {
   padding: 4px !important;
   background: rgba(246, 252, 251, .98) !important;
