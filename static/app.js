@@ -670,7 +670,7 @@ function openProfile() {
 function showAdminPanel() {
   $("#mainView").classList.add("hidden");
   $("#adminView").classList.remove("hidden");
-  loadAdminUsers();
+  loadAdminSection("users");
 }
 
 function hideAdminPanel() {
@@ -679,50 +679,225 @@ function hideAdminPanel() {
 }
 
 async function loadAdminUsers() {
-  let selectedGroupId = $("#adminView").dataset.selectedGroup || "";
+  const selectedGroupId = $("#adminView").dataset.selectedGroup || "";
+  const filterGroupId = $("#adminMemberGroupFilter")?.value || "";
   const groupData = await api("/api/user-groups");
   state.userGroups = groupData.groups;
   renderAdminGroups();
-  if (!selectedGroupId && state.userGroups.length > 0) {
-    selectedGroupId = String(state.userGroups[0].id);
-    $("#adminView").dataset.selectedGroup = selectedGroupId;
-  }
-  $("#adminGroupLabel").textContent = selectedGroupId
-    ? `— ${(state.userGroups.find(g => String(g.id) === selectedGroupId) || {}).name || ""}`
+  renderAdminMemberGroupFilter(filterGroupId);
+  $("#adminGroupLabel").textContent = filterGroupId
+    ? `— ${(state.userGroups.find(g => String(g.id) === filterGroupId) || {}).name || ""}`
     : "";
   const data = await api("/api/users");
+  state.adminUsers = data.users;
   let users = data.users;
-  if (selectedGroupId) {
-    users = users.filter(u => String(u.group_id) === selectedGroupId);
+  if (filterGroupId) {
+    users = users.filter(u => String(u.group_id) === filterGroupId);
   }
   renderAdminUserList(users);
+}
+
+function renderAdminMemberGroupFilter(value = "") {
+  const select = $("#adminMemberGroupFilter");
+  if (!select) return;
+  select.innerHTML = `<option value="">全部用户组</option>${(state.userGroups || []).map((group) => (
+    `<option value="${group.id}">${escapeHtml(group.name)}</option>`
+  )).join("")}`;
+  select.value = value;
+}
+
+function loadAdminSection(tabName) {
+  $$(".admin-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === tabName));
+  $$("#adminView .admin-content").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.id !== `admin${tabName.charAt(0).toUpperCase() + tabName.slice(1)}Panel`);
+  });
+  if (tabName === "users") {
+    loadAdminSubTab($("#adminUsersPanel"), "groups");
+    loadAdminUsers();
+  } else if (tabName === "settings") {
+    loadAdminSubTab($("#adminSettingsPanel"), "storage");
+    loadAdminSettings();
+  } else if (tabName === "audit") {
+    loadAdminAudit();
+  }
+}
+
+function loadAdminSubTab(panel, subTabName) {
+  if (!panel) return;
+  panel.querySelectorAll(".admin-sub-tab").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.subTab === subTabName);
+  });
+  panel.querySelectorAll(".admin-sub-panel").forEach((subPanel) => {
+    subPanel.classList.toggle("hidden", subPanel.id !== `adminSub${subTabName.charAt(0).toUpperCase() + subTabName.slice(1)}Panel`);
+  });
 }
 
 function renderAdminGroups() {
   const groups = state.userGroups || [];
   const selected = $("#adminView").dataset.selectedGroup || "";
-  $("#adminUserGroupsList").innerHTML = groups.map(group => `
-    <article class="user-item ${String(group.id) === selected ? "selected" : ""}" data-group-id="${group.id}">
-      <div><strong>${escapeHtml(group.name)}</strong><span>${escapeHtml(group.description || "")}</span></div>
-      <div class="user-actions">
-        <button type="button" data-edit-group="${group.id}">编辑</button>
-        <button type="button" data-delete-group="${group.id}">删除</button>
-      </div>
-    </article>
-  `).join("");
+  $("#adminUserGroupsList").innerHTML = `
+    <table class="admin-group-table">
+      <colgroup>
+        <col class="admin-group-name-col" />
+        <col class="admin-group-note-col" />
+        <col class="admin-group-count-col" />
+        <col class="admin-group-actions-col" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>组名</th>
+          <th>备注</th>
+          <th>成员数</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${groups.map((group) => adminGroupRowHtml(group, { selected: String(group.id) === selected })).join("")}
+        <tr class="admin-group-add-row">
+          <td colspan="4"><button class="add-row-button" type="button" data-add-group-row>＋</button></td>
+        </tr>
+      </tbody>
+    </table>
+  `;
+}
+
+function adminGroupRowHtml(group, options = {}) {
+  const editing = Boolean(options.editing);
+  const isNew = Boolean(options.isNew);
+  const selected = Boolean(options.selected);
+  return `
+    <tr class="admin-group-row ${selected ? "selected" : ""} ${editing ? "editing" : ""}" data-group-id="${isNew ? "" : group.id}" data-new-group="${isNew ? "1" : "0"}">
+      <td><input name="name" value="${escapeHtml(group.name || "")}" placeholder="组名称" ${editing ? "" : "disabled"} /></td>
+      <td><input name="description" value="${escapeHtml(group.description || "")}" placeholder="备注" ${editing ? "" : "disabled"} /></td>
+      <td class="member-count">${Number(group.member_count || 0)}</td>
+      <td class="group-row-actions">
+        ${editing
+          ? `<button class="primary" type="button" data-save-group-row>保存</button><button type="button" data-cancel-group-row>取消</button>`
+          : `<button type="button" data-edit-group>编辑</button><button type="button" data-delete-group>删除</button>`}
+      </td>
+    </tr>
+  `;
+}
+
+function setAdminGroupRowEditing(row, editing) {
+  row.classList.toggle("editing", editing);
+  row.querySelectorAll("input").forEach((input) => { input.disabled = !editing; });
+  row.querySelector(".group-row-actions").innerHTML = editing
+    ? `<button class="primary" type="button" data-save-group-row>保存</button><button type="button" data-cancel-group-row>取消</button>`
+    : `<button type="button" data-edit-group>编辑</button><button type="button" data-delete-group>删除</button>`;
+  if (editing) row.querySelector("input[name='name']")?.focus();
+}
+
+function restoreAdminGroupRow(row) {
+  if (row.dataset.newGroup === "1") {
+    renderAdminGroups();
+    return;
+  }
+  const group = (state.userGroups || []).find((item) => String(item.id) === row.dataset.groupId);
+  if (!group) return;
+  row.querySelector("input[name='name']").value = group.name || "";
+  row.querySelector("input[name='description']").value = group.description || "";
+  setAdminGroupRowEditing(row, false);
+}
+
+function expandNewAdminGroupRow(row) {
+  row.outerHTML = adminGroupRowHtml({ name: "", description: "", member_count: 0 }, { editing: true, isNew: true });
+  $("#adminUserGroupsList .admin-group-row[data-new-group='1'] input[name='name']")?.focus();
 }
 
 function renderAdminUserList(users) {
-  $("#adminUsersList").innerHTML = users.map(user => `
-    <article class="user-item">
-      <div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.username)} · ${escapeHtml(user.role)}</span></div>
-      <div class="user-actions">
-        <button type="button" data-edit-user="${user.id}">编辑</button>
-        <button type="button" data-delete-user="${user.id}" ${state.user && state.user.id === user.id ? "disabled" : ""}>删除</button>
-      </div>
-    </article>
-  `).join("");
+  $("#adminUsersList").innerHTML = `
+    <table class="admin-member-table">
+      <colgroup>
+        <col class="admin-member-id-col" />
+        <col class="admin-member-account-col" />
+        <col class="admin-member-group-col" />
+        <col class="admin-member-password-col" />
+        <col class="admin-member-actions-col" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>用户ID</th>
+          <th>账号</th>
+          <th>用户组</th>
+          <th>密码</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${users.map((user) => adminUserRowHtml(user)).join("")}
+        <tr class="admin-member-add-row">
+          <td colspan="5"><button class="add-row-button" type="button" data-add-user-row>＋</button></td>
+        </tr>
+      </tbody>
+    </table>
+  `;
   $("#adminUsersList").dataset.users = JSON.stringify(users);
+}
+
+function adminGroupOptions(selectedId = "") {
+  return `<option value="">未分组</option>${(state.userGroups || []).map((group) => (
+    `<option value="${group.id}" ${String(group.id) === String(selectedId || "") ? "selected" : ""}>${escapeHtml(group.name)}</option>`
+  )).join("")}`;
+}
+
+function formatUserId(id) {
+  const number = Number(id);
+  return Number.isFinite(number) ? String(number).padStart(4, "0") : "";
+}
+
+function adminUserRowHtml(user, options = {}) {
+  const editing = Boolean(options.editing);
+  const isNew = Boolean(options.isNew);
+  const currentUserId = String(state.user?.id || "");
+  return `
+    <tr class="admin-member-row ${editing ? "editing" : ""}" data-user-id="${isNew ? "" : user.id}" data-new-user="${isNew ? "1" : "0"}">
+      <td class="member-id">${isNew ? "" : formatUserId(user.id)}</td>
+      <td><input name="username" value="${escapeHtml(user.username || "")}" placeholder="账号" ${editing && isNew ? "" : "disabled"} /></td>
+      <td><select name="group_id" ${editing ? "" : "disabled"}>${adminGroupOptions(user.group_id)}</select></td>
+      <td><input name="password" value="" placeholder="${isNew ? "初始密码" : "留空不修改"}" type="password" ${editing ? "" : "disabled"} /></td>
+      <td class="member-row-actions">
+        ${editing
+          ? `<button class="primary" type="button" data-save-user-row>保存</button><button type="button" data-cancel-user-row>取消</button>`
+          : `<button type="button" data-edit-user>编辑</button><button type="button" data-delete-user ${!isNew && currentUserId === String(user.id) ? "disabled" : ""}>删除</button>`}
+      </td>
+    </tr>
+  `;
+}
+
+function setAdminUserRowEditing(row, editing) {
+  row.classList.toggle("editing", editing);
+  row.querySelectorAll("input, select").forEach((field) => {
+    field.disabled = !editing;
+  });
+  row.querySelector(".member-row-actions").innerHTML = editing
+    ? `<button class="primary" type="button" data-save-user-row>保存</button><button type="button" data-cancel-user-row>取消</button>`
+    : `<button type="button" data-edit-user>编辑</button><button type="button" data-delete-user ${String(state.user?.id || "") === row.dataset.userId ? "disabled" : ""}>删除</button>`;
+  if (editing) row.querySelector("input[name='username']")?.focus();
+}
+
+function restoreAdminUserRow(row) {
+  if (row.dataset.newUser === "1") {
+    renderAdminUserList(filteredAdminUsers());
+    return;
+  }
+  const user = (state.adminUsers || []).find((item) => String(item.id) === row.dataset.userId);
+  if (!user) return;
+  row.querySelector("input[name='username']").value = user.username || "";
+  row.querySelector("select[name='group_id']").value = user.group_id || "";
+  row.querySelector("input[name='password']").value = "";
+  setAdminUserRowEditing(row, false);
+}
+
+function filteredAdminUsers() {
+  const filterGroupId = $("#adminMemberGroupFilter")?.value || "";
+  return (state.adminUsers || []).filter((user) => !filterGroupId || String(user.group_id) === filterGroupId);
+}
+
+function expandNewAdminUserRow(row) {
+  const filterGroupId = $("#adminMemberGroupFilter")?.value || "";
+  row.outerHTML = adminUserRowHtml({ username: "", group_id: filterGroupId }, { editing: true, isNew: true });
+  $("#adminUsersList .admin-member-row[data-new-user='1'] input[name='username']")?.focus();
 }
 
 async function saveAdminUserGroup() {
@@ -754,11 +929,30 @@ async function saveAdminUser() {
 async function loadAdminSettings() {
   const data = await api("/api/settings");
   const s = data.settings;
-  $("#adminSettingsForm").smtp_host.value = s.smtp_host || "";
-  $("#adminSettingsForm").smtp_port.value = s.smtp_port || "";
-  $("#adminSettingsForm").smtp_user.value = s.smtp_user || "";
-  $("#adminSettingsForm").smtp_pass.value = s.smtp_pass || "";
-  $("#adminSettingsForm").smtp_sender.value = s.smtp_sender || "";
+  const storageForm = $("#adminStorageForm");
+  storageForm.storage_type.value = s.storage_type || "local";
+  storageForm.upload_dir.value = s.upload_dir || "uploads";
+  storageForm.s3_endpoint.value = s.s3_endpoint || "";
+  storageForm.s3_bucket.value = s.s3_bucket || "";
+  storageForm.s3_region.value = s.s3_region || "";
+  storageForm.s3_access_key.value = s.s3_access_key || "";
+  storageForm.s3_secret_key.value = s.s3_secret_key || "";
+  storageForm.s3_custom_domain.value = s.s3_custom_domain || "";
+  toggleStorageConfigGroups(storageForm.storage_type.value);
+
+  const emailForm = $("#adminEmailForm");
+  emailForm.smtp_host.value = s.smtp_host || "";
+  emailForm.smtp_port.value = s.smtp_port || "";
+  emailForm.smtp_user.value = s.smtp_user || "";
+  emailForm.smtp_pass.value = s.smtp_pass || "";
+  emailForm.smtp_sender.value = s.smtp_sender || "";
+}
+
+function toggleStorageConfigGroups(storageType) {
+  const activeType = storageType === "s3" ? "s3" : "local";
+  $$(".storage-config-group").forEach((group) => {
+    group.classList.toggle("hidden", group.dataset.storageGroup !== activeType);
+  });
 }
 
 async function loadAdminAudit() {
@@ -914,76 +1108,161 @@ function bindEvents() {
   });
   // --- Admin panel ---
   $("#backToMainBtn").addEventListener("click", hideAdminPanel);
+  $("#adminSidebarToggle").addEventListener("click", () => {
+    const collapsed = $("#adminSidebar").classList.toggle("collapsed");
+    $("#adminSidebarToggle").textContent = collapsed ? "⇥" : "⇤";
+    $("#adminSidebarToggle").title = collapsed ? "展开侧栏" : "收起侧栏";
+  });
   $$(".admin-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
-      $$(".admin-tab").forEach(t => t.classList.toggle("active", t === tab));
-      $$("#adminView .admin-content").forEach(p => p.classList.toggle("hidden", p.id !== `admin${tab.dataset.tab.charAt(0).toUpperCase() + tab.dataset.tab.slice(1)}Panel`));
-      if (tab.dataset.tab === "settings") loadAdminSettings();
-      else if (tab.dataset.tab === "audit") loadAdminAudit();
+      loadAdminSection(tab.dataset.tab);
     });
   });
+  $$(".admin-sub-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      loadAdminSubTab(tab.closest(".admin-content"), tab.dataset.subTab);
+      if (tab.dataset.subTab === "members") loadAdminUsers();
+      if (tab.dataset.subTab === "storage" || tab.dataset.subTab === "email") loadAdminSettings();
+    });
+  });
+  $("#adminMemberGroupFilter").addEventListener("change", () => loadAdminUsers());
   // Admin user group save
   $("#adminSaveGroupBtn").addEventListener("click", () => saveAdminUserGroup().catch(e => showMessage(e.message, "error")));
   // Admin user save
   $("#adminSaveUserBtn").addEventListener("click", () => saveAdminUser().catch(e => showMessage(e.message, "error")));
   // Admin user group list: select/edit/delete
   $("#adminUserGroupsList").addEventListener("click", async (event) => {
-    const groupEl = event.target.closest("[data-group-id]");
+    const add = event.target.closest("[data-add-group-row]");
+    const row = event.target.closest(".admin-group-row");
+    if (add) {
+      expandNewAdminGroupRow(event.target.closest(".admin-group-add-row"));
+      return;
+    }
+    if (!row) return;
     const edit = event.target.closest("[data-edit-group]");
+    const save = event.target.closest("[data-save-group-row]");
+    const cancel = event.target.closest("[data-cancel-group-row]");
     const remove = event.target.closest("[data-delete-group]");
     if (edit) {
-      const group = (state.userGroups || []).find(g => g.id === Number(edit.dataset.editGroup));
-      if (group) {
-        const form = $("#adminUserGroupForm");
-        form.id.value = group.id;
-        form.name.value = group.name;
-        form.description.value = group.description || "";
-        $("#adminSaveGroupBtn").textContent = "更新用户组";
+      setAdminGroupRowEditing(row, true);
+      return;
+    }
+    if (cancel) {
+      restoreAdminGroupRow(row);
+      return;
+    }
+    if (save) {
+      const name = row.querySelector("input[name='name']").value.trim();
+      const description = row.querySelector("input[name='description']").value.trim();
+      if (!name) {
+        showMessage("用户组名称不能为空", "error");
+        row.querySelector("input[name='name']").focus();
+        return;
       }
+      const isNew = row.dataset.newGroup === "1";
+      const group = (state.userGroups || []).find((item) => String(item.id) === row.dataset.groupId);
+      const path = isNew ? "/api/user-groups" : `/api/user-groups/${row.dataset.groupId}`;
+      const method = isNew ? "POST" : "PUT";
+      await api(path, {
+        method,
+        body: JSON.stringify({ name, description, sort_order: group?.sort_order || 0 }),
+      });
+      await loadAdminUsers();
+      showMessage(isNew ? "用户组已新增" : "用户组已保存");
       return;
     }
     if (remove && window.confirm("确认删除该用户组？")) {
-      await api(`/api/user-groups/${remove.dataset.deleteGroup}`, { method: "DELETE" });
+      await api(`/api/user-groups/${row.dataset.groupId}`, { method: "DELETE" });
       $("#adminUserGroupForm").reset();
       $("#adminSaveGroupBtn").textContent = "新增用户组";
       await loadAdminUsers();
       showMessage("用户组已删除");
+      return;
     }
-    if (groupEl && !edit && !remove) {
-      $("#adminView").dataset.selectedGroup = groupEl.dataset.groupId;
+    if (!event.target.closest("button, input")) {
+      $("#adminView").dataset.selectedGroup = row.dataset.groupId;
       await loadAdminUsers();
     }
   });
   $("#adminUserGroupForm").addEventListener("reset", () => { $("#adminSaveGroupBtn").textContent = "新增用户组"; });
-  // Admin user list: edit/delete
+  // Admin user list: inline edit/delete/add
   $("#adminUsersList").addEventListener("click", async (event) => {
+    const add = event.target.closest("[data-add-user-row]");
+    const row = event.target.closest(".admin-member-row");
+    if (add) {
+      expandNewAdminUserRow(event.target.closest(".admin-member-add-row"));
+      return;
+    }
+    if (!row) return;
     const edit = event.target.closest("[data-edit-user]");
+    const save = event.target.closest("[data-save-user-row]");
+    const cancel = event.target.closest("[data-cancel-user-row]");
     const remove = event.target.closest("[data-delete-user]");
-    const users = JSON.parse($("#adminUsersList").dataset.users || "[]");
     if (edit) {
-      const user = users.find(u => u.id === Number(edit.dataset.editUser));
-      const form = $("#adminUserForm");
-      form.id.value = user.id;
-      form.username.value = user.username;
-      form.username.disabled = true;
-      form.display_name.value = user.display_name;
-      form.role.value = user.role;
-      form.password.value = "";
+      setAdminUserRowEditing(row, true);
+      return;
+    }
+    if (cancel) {
+      restoreAdminUserRow(row);
+      return;
+    }
+    if (save) {
+      const isNew = row.dataset.newUser === "1";
+      const username = row.querySelector("input[name='username']").value.trim();
+      const groupId = row.querySelector("select[name='group_id']").value;
+      const password = row.querySelector("input[name='password']").value.trim();
+      if (!username) {
+        showMessage("账号不能为空", "error");
+        row.querySelector("input[name='username']").focus();
+        return;
+      }
+      if (isNew && !password) {
+        showMessage("新增成员需要填写初始密码", "error");
+        row.querySelector("input[name='password']").focus();
+        return;
+      }
+      const payload = {
+        username,
+        display_name: username,
+        group_id: groupId ? Number(groupId) : null,
+      };
+      if (isNew) payload.role = "viewer";
+      if (password) payload.password = password;
+      const path = isNew ? "/api/users" : `/api/users/${row.dataset.userId}`;
+      const method = isNew ? "POST" : "PUT";
+      await api(path, { method, body: JSON.stringify(payload) });
+      await loadAdminUsers();
+      showMessage(isNew ? "成员已新增" : "成员已保存");
+      return;
     }
     if (remove && window.confirm("确认删除该用户？")) {
-      await api(`/api/users/${remove.dataset.deleteUser}`, { method: "DELETE" });
+      await api(`/api/users/${row.dataset.userId}`, { method: "DELETE" });
       await loadAdminUsers();
       showMessage("用户已删除");
     }
   });
   $("#adminUserForm").addEventListener("reset", () => { $("#adminUserForm").username.disabled = false; });
-  // Admin settings save
-  $("#adminSettingsForm").addEventListener("submit", async (event) => {
+  // Admin storage settings save
+  $("#adminStorageForm").storage_type.addEventListener("change", (event) => {
+    toggleStorageConfigGroups(event.target.value);
+  });
+  $("#adminStorageForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
     try {
       await api("/api/settings", { method: "PUT", body: JSON.stringify(payload), headers: {} });
-      showMessage("设置已保存", "success");
+      showMessage("存储配置已保存", "success");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  });
+  // Admin email settings save
+  $("#adminEmailForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try {
+      await api("/api/settings", { method: "PUT", body: JSON.stringify(payload), headers: {} });
+      showMessage("邮箱配置已保存", "success");
     } catch (error) {
       showMessage(error.message, "error");
     }

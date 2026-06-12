@@ -389,11 +389,16 @@ def init_db() -> None:
             conn.execute("ALTER TABLE email_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
         # Seed system_settings defaults if empty
         if conn.execute("SELECT COUNT(*) FROM system_settings").fetchone()[0] == 0:
-            for k in ("smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_sender"):
+            for k in (
+                "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_sender",
+                "storage_type", "upload_dir", "s3_endpoint", "s3_bucket", "s3_region",
+                "s3_access_key", "s3_secret_key", "s3_custom_domain",
+            ):
                 conn.execute(
                     "INSERT OR IGNORE INTO system_settings(key, value) VALUES (?, '')",
                     (k,),
                 )
+            conn.execute("UPDATE system_settings SET value = 'local' WHERE key = 'storage_type'")
         # Seed default user group
         group_count = conn.execute("SELECT COUNT(*) FROM user_groups").fetchone()[0]
         if group_count == 0:
@@ -881,9 +886,12 @@ class AppHandler(BaseHTTPRequestHandler):
                         row_to_dict(row)
                         for row in conn.execute(
                             """
-                            SELECT id, name, description, sort_order, created_at
-                            FROM user_groups
-                            ORDER BY sort_order ASC, id ASC
+                            SELECT g.id, g.name, g.description, g.sort_order, g.created_at,
+                                   COUNT(u.id) AS member_count
+                            FROM user_groups g
+                            LEFT JOIN users u ON u.group_id = g.id
+                            GROUP BY g.id
+                            ORDER BY g.sort_order ASC, g.id ASC
                             """
                         )
                     ]
@@ -1130,7 +1138,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not user:
                     return
                 data = self.read_json()
-                missing = require_columns(data, ["username", "display_name", "password"])
+                missing = require_columns(data, ["username", "password"])
                 if missing:
                     self.send_error_json(f"缺少字段：{', '.join(missing)}")
                     return
@@ -1154,7 +1162,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         """,
                         (
                             data["username"].strip(),
-                            data["display_name"].strip(),
+                            data.get("display_name", data["username"]).strip() or data["username"].strip(),
                             role,
                             hash_password(data["password"]),
                             group_id,
@@ -1292,6 +1300,18 @@ class AppHandler(BaseHTTPRequestHandler):
                     if not existing:
                         self.send_error_json("用户不存在", HTTPStatus.NOT_FOUND)
                         return
+                    username = data.get("username", existing["username"]).strip()
+                    if not username:
+                        self.send_error_json("账号不能为空")
+                        return
+                    duplicate = conn.execute(
+                        "SELECT id FROM users WHERE username = ? AND id <> ?",
+                        (username, target_id),
+                    ).fetchone()
+                    if duplicate:
+                        self.send_error_json("账号已存在")
+                        return
+                    display_name = data.get("display_name", username).strip() or username
                     role = data.get("role", existing["role"])
                     if role not in {"admin", "editor", "viewer"}:
                         self.send_error_json("角色必须是 admin、editor 或 viewer")
@@ -1307,11 +1327,12 @@ class AppHandler(BaseHTTPRequestHandler):
                         conn.execute(
                             """
                             UPDATE users
-                            SET display_name = ?, role = ?, password_hash = ?, group_id = ?
+                            SET username = ?, display_name = ?, role = ?, password_hash = ?, group_id = ?
                             WHERE id = ?
                             """,
                             (
-                                data.get("display_name", existing["display_name"]).strip(),
+                                username,
+                                display_name,
                                 role,
                                 hash_password(data["password"]),
                                 group_id,
@@ -1320,8 +1341,8 @@ class AppHandler(BaseHTTPRequestHandler):
                         )
                     else:
                         conn.execute(
-                            "UPDATE users SET display_name = ?, role = ?, group_id = ? WHERE id = ?",
-                            (data.get("display_name", existing["display_name"]).strip(), role, group_id, target_id),
+                            "UPDATE users SET username = ?, display_name = ?, role = ?, group_id = ? WHERE id = ?",
+                            (username, display_name, role, group_id, target_id),
                         )
                     log_audit(conn, user["id"], "update_user", f"user:{target_id}", {"role": role})
                     self.send_json({"ok": True})
@@ -1330,7 +1351,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     if user["role"] != "admin":
                         self.send_error_json("当前账号没有操作权限", HTTPStatus.FORBIDDEN)
                         return
-                    for key in ("smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_sender"):
+                    for key in (
+                        "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_sender",
+                        "storage_type", "upload_dir", "s3_endpoint", "s3_bucket", "s3_region",
+                        "s3_access_key", "s3_secret_key", "s3_custom_domain",
+                    ):
                         if key in data:
                             set_setting(conn, key, str(data.get(key, "")).strip())
                     log_audit(conn, user["id"], "update_settings", "system_settings", {k: data.get(k, "***") for k in data})

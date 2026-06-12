@@ -284,60 +284,117 @@
         </div>
         <button id="backToMainBtn" class="ghost" type="button">← 返回选型清单</button>
       </header>
-      <nav class="admin-tabs">
-        <button class="admin-tab active" data-tab="users">👥 用户管理</button>
-        <button class="admin-tab" data-tab="settings">📧 系统设置</button>
-        <button class="admin-tab" data-tab="audit">📋 修改记录</button>
-      </nav>
-      <section class="admin-content" id="adminUsersPanel">
-        <div class="users-layout">
-          <div class="users-groups-panel">
-            <div class="panel-subhead">用户组</div>
-            <form id="adminUserGroupForm" class="user-form">
-              <input name="id" type="hidden" />
-              <input name="name" placeholder="组名称" required />
-              <input name="description" placeholder="描述（可选）" />
-              <button class="primary" id="adminSaveGroupBtn" type="button">新增用户组</button>
-            </form>
-            <div id="adminUserGroupsList" class="users-list"></div>
-          </div>
-          <div class="users-panel">
-            <div class="panel-subhead">用户 <span id="adminGroupLabel" class="muted"></span></div>
-            <form id="adminUserForm" class="user-form">
-              <input name="id" type="hidden" />
-              <input name="username" placeholder="账号" required />
-              <input name="display_name" placeholder="显示名" required />
-              <select name="role">
-                <option value="viewer">查看者</option>
-                <option value="editor">编辑员</option>
-                <option value="admin">管理员</option>
-              </select>
-              <input name="password" placeholder="新密码" type="password" />
-              <button class="primary" id="adminSaveUserBtn" type="button">保存用户</button>
-            </form>
-            <div id="adminUsersList" class="users-list"></div>
-          </div>
+      <div class="admin-layout">
+        <aside class="admin-sidebar" id="adminSidebar" aria-label="后台一级导航">
+          <button class="admin-sidebar-toggle" id="adminSidebarToggle" type="button" title="收起侧栏">⇤</button>
+          <nav class="admin-tabs">
+            <button class="admin-tab active" data-tab="users" type="button"><span class="admin-tab-icon">👥</span><span class="admin-tab-label">用户管理</span></button>
+            <button class="admin-tab" data-tab="settings" type="button"><span class="admin-tab-icon">⚙️</span><span class="admin-tab-label">系统设置</span></button>
+            <button class="admin-tab" data-tab="audit" type="button"><span class="admin-tab-icon">📋</span><span class="admin-tab-label">修改记录</span></button>
+          </nav>
+        </aside>
+
+        <div class="admin-main">
+          <section class="admin-content" id="adminUsersPanel">
+            <nav class="admin-sub-tabs" aria-label="用户管理二级标签">
+              <button class="admin-sub-tab active" data-sub-tab="groups" type="button">用户组</button>
+              <button class="admin-sub-tab" data-sub-tab="members" type="button">成员</button>
+            </nav>
+            <div class="admin-sub-panel" id="adminSubGroupsPanel">
+              <form id="adminUserGroupForm" class="user-form hidden">
+                <input name="id" type="hidden" />
+                <input name="name" placeholder="组名称" required />
+                <input name="description" placeholder="描述（可选）" />
+                <button class="primary" id="adminSaveGroupBtn" type="button">新增用户组</button>
+              </form>
+              <div id="adminUserGroupsList" class="users-list"></div>
+            </div>
+            <div class="admin-sub-panel hidden" id="adminSubMembersPanel">
+              <div class="admin-panel-tools">
+                <div class="panel-subhead">成员 <span id="adminGroupLabel" class="muted"></span></div>
+                <label class="admin-filter-label">
+                  <span>用户组</span>
+                  <select id="adminMemberGroupFilter">
+                    <option value="">全部用户组</option>
+                  </select>
+                </label>
+              </div>
+              <form id="adminUserForm" class="user-form hidden">
+                <input name="id" type="hidden" />
+                <input name="username" placeholder="账号" required />
+                <input name="display_name" placeholder="显示名" required />
+                <select name="role">
+                  <option value="viewer">查看者</option>
+                  <option value="editor">编辑员</option>
+                  <option value="admin">管理员</option>
+                </select>
+                <input name="password" placeholder="新密码" type="password" />
+                <button class="primary" id="adminSaveUserBtn" type="button">保存用户</button>
+              </form>
+              <div id="adminUsersList" class="users-list"></div>
+            </div>
+          </section>
+
+          <section class="admin-content hidden" id="adminSettingsPanel">
+            <nav class="admin-sub-tabs" aria-label="系统设置二级标签">
+              <button class="admin-sub-tab active" data-sub-tab="storage" type="button">存储配置</button>
+              <button class="admin-sub-tab" data-sub-tab="email" type="button">邮箱配置</button>
+            </nav>
+            <div class="admin-sub-panel" id="adminSubStoragePanel">
+              <form id="adminStorageForm" class="settings-form">
+                <fieldset>
+                  <legend>存储类型</legend>
+                  <p class="hint">选择上传文件和图片的保存位置。</p>
+                  <label><span>存储类型</span>
+                    <select name="storage_type">
+                      <option value="local">本地存储</option>
+                      <option value="s3">对象存储</option>
+                    </select>
+                  </label>
+                </fieldset>
+                <fieldset class="storage-config-group" data-storage-group="local">
+                  <legend>本地存储</legend>
+                  <p class="hint">文件保存在服务器本地目录中，适合单机部署或测试环境。</p>
+                  <label><span>本地上传目录</span><input name="upload_dir" placeholder="uploads" /></label>
+                </fieldset>
+                <fieldset class="storage-config-group hidden" data-storage-group="s3">
+                  <legend>对象存储</legend>
+                  <p class="hint">兼容 S3 / OSS 的对象存储配置，适合多实例部署或公网文件访问。</p>
+                  <label><span>Endpoint</span><input name="s3_endpoint" placeholder="https://oss.example.com" /></label>
+                  <label><span>Bucket</span><input name="s3_bucket" placeholder="bucket-name" /></label>
+                  <label><span>Region</span><input name="s3_region" placeholder="auto" /></label>
+                  <label><span>Access Key</span><input name="s3_access_key" autocomplete="off" /></label>
+                  <label><span>Secret Key</span><input name="s3_secret_key" type="password" autocomplete="off" /></label>
+                  <label><span>自定义访问域名</span><input name="s3_custom_domain" placeholder="https://cdn.example.com" /></label>
+                </fieldset>
+                <div class="dialog-actions">
+                  <button class="primary" type="submit">保存配置</button>
+                </div>
+              </form>
+            </div>
+            <div class="admin-sub-panel hidden" id="adminSubEmailPanel">
+              <form id="adminEmailForm" class="settings-form">
+                <fieldset>
+                  <legend>SMTP 邮箱配置</legend>
+                  <p class="hint">用于发送注册验证码。以 QQ 邮箱为例：smtp.qq.com，端口 465，需在 QQ 邮箱设置中生成授权码。</p>
+                  <label><span>SMTP 服务器</span><input name="smtp_host" placeholder="smtp.qq.com" /></label>
+                  <label><span>端口</span><input name="smtp_port" placeholder="465" inputmode="numeric" /></label>
+                  <label><span>邮箱账号</span><input name="smtp_user" placeholder="your@qq.com" autocomplete="email" /></label>
+                  <label><span>邮箱密码 / 授权码</span><input name="smtp_pass" type="password" placeholder="QQ 邮箱授权码" autocomplete="off" /></label>
+                  <label><span>发件人地址</span><input name="smtp_sender" placeholder="留空则与邮箱账号一致" /></label>
+                </fieldset>
+                <div class="dialog-actions">
+                  <button class="primary" type="submit">保存邮箱配置</button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section class="admin-content hidden" id="adminAuditPanel">
+            <div id="adminAuditList" class="audit-list"></div>
+          </section>
         </div>
-      </section>
-      <section class="admin-content hidden" id="adminSettingsPanel">
-        <form id="adminSettingsForm" class="settings-form">
-          <fieldset>
-            <legend>📧 SMTP 邮箱配置</legend>
-            <p class="hint">用于发送注册验证码。以 QQ 邮箱为例：smtp.qq.com，端口 465，需在 QQ 邮箱设置中生成授权码。</p>
-            <label><span>SMTP 服务器</span><input name="smtp_host" placeholder="smtp.qq.com" /></label>
-            <label><span>端口</span><input name="smtp_port" placeholder="465" inputmode="numeric" /></label>
-            <label><span>邮箱账号</span><input name="smtp_user" placeholder="your@qq.com" autocomplete="email" /></label>
-            <label><span>邮箱密码 / 授权码</span><input name="smtp_pass" type="password" placeholder="QQ 邮箱授权码" autocomplete="off" /></label>
-            <label><span>发件人地址</span><input name="smtp_sender" placeholder="留空则与邮箱账号一致" /></label>
-          </fieldset>
-          <div class="dialog-actions">
-            <button class="primary" type="submit">保存设置</button>
-          </div>
-        </form>
-      </section>
-      <section class="admin-content hidden" id="adminAuditPanel">
-        <div id="adminAuditList" class="audit-list"></div>
-      </section>
+      </div>
     </section>
 
     <script src="/app.js"></script>
