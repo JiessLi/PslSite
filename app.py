@@ -358,6 +358,17 @@ CREATE TABLE IF NOT EXISTS system_settings (
     key TEXT PRIMARY KEY,
     value TEXT DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS header_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_idx INTEGER NOT NULL,
+    col_idx INTEGER NOT NULL,
+    label TEXT DEFAULT '',
+    colspan INTEGER DEFAULT 1,
+    rowspan INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    UNIQUE(row_idx, col_idx)
+);
 """
 
 
@@ -1037,6 +1048,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     settings = {row["key"]: row["value"] for row in rows}
                 self.send_json({"settings": settings})
                 return
+            if path == "/api/header-config":
+                with connect() as conn:
+                    rows = conn.execute(
+                        "SELECT * FROM header_config ORDER BY row_idx ASC, col_idx ASC"
+                    ).fetchall()
+                self.send_json({"cells": [row_to_dict(row) for row in rows]})
+                return
             if path.startswith("/uploads/"):
                 self.serve_upload(path)
                 return
@@ -1325,6 +1343,61 @@ class AppHandler(BaseHTTPRequestHandler):
                     log_audit(conn, user["id"], "create_user", f"user:{cursor.lastrowid}", {"username": data["username"], "email": email})
                 self.send_json({"id": cursor.lastrowid})
                 return
+            if path == "/api/header-config":
+                if not self.require_role("admin"):
+                    return
+                data = self.read_json()
+                row_idx = int(data.get("row_idx", 0))
+                col_idx = int(data.get("col_idx", 0))
+                label = str(data.get("label", "")).strip()
+                with connect() as conn:
+                    cursor = conn.execute(
+                        "INSERT INTO header_config(row_idx, col_idx, label) VALUES (?, ?, ?)",
+                        (row_idx, col_idx, label),
+                    )
+                    log_audit(conn, user["id"], "add_header_cell", f"header:{row_idx},{col_idx}", {"label": label})
+                self.send_json({"id": cursor.lastrowid})
+                return
+            if path == "/api/header-config/add-row":
+                if not self.require_role("admin"):
+                    return
+                data = self.read_json()
+                row_idx = int(data.get("row_idx", -1))
+                with connect() as conn:
+                    if row_idx < 0:
+                        max_row = conn.execute("SELECT COALESCE(MAX(row_idx), -1) FROM header_config").fetchone()[0]
+                        row_idx = max_row + 1
+                    conn.execute(
+                        "UPDATE header_config SET row_idx = row_idx + 1 WHERE row_idx >= ?",
+                        (row_idx,),
+                    )
+                    conn.execute(
+                        "INSERT INTO header_config(row_idx, col_idx, label) VALUES (?, 0, '')",
+                        (row_idx,),
+                    )
+                    log_audit(conn, user["id"], "add_header_row", f"row:{row_idx}", {})
+                self.send_json({"ok": True, "row_idx": row_idx})
+                return
+            if path == "/api/header-config/add-col":
+                if not self.require_role("admin"):
+                    return
+                data = self.read_json()
+                col_idx = int(data.get("col_idx", -1))
+                with connect() as conn:
+                    if col_idx < 0:
+                        max_col = conn.execute("SELECT COALESCE(MAX(col_idx), -1) FROM header_config").fetchone()[0]
+                        col_idx = max_col + 1
+                    conn.execute(
+                        "UPDATE header_config SET col_idx = col_idx + 1 WHERE col_idx >= ?",
+                        (col_idx,),
+                    )
+                    conn.execute(
+                        "INSERT INTO header_config(row_idx, col_idx, label) VALUES (0, ?, '')",
+                        (col_idx,),
+                    )
+                    log_audit(conn, user["id"], "add_header_col", f"col:{col_idx}", {})
+                self.send_json({"ok": True, "col_idx": col_idx})
+                return
             self.send_error_json("接口不存在", HTTPStatus.NOT_FOUND)
         except Exception as exc:
             traceback.print_exc()
@@ -1561,6 +1634,34 @@ class AppHandler(BaseHTTPRequestHandler):
                     log_audit(conn, user["id"], "update_settings", "system_settings", {k: data.get(k, "***") for k in data})
                     self.send_json({"ok": True})
                     return
+                if path.startswith("/api/header-config/"):
+                    if not self.require_role("admin"):
+                        return
+                    cell_id = int(path.rsplit("/", 1)[1])
+                    data = self.read_json()
+                    with connect() as conn:
+                        existing = conn.execute("SELECT id FROM header_config WHERE id = ?", (cell_id,)).fetchone()
+                        if not existing:
+                            self.send_error_json("单元格不存在", HTTPStatus.NOT_FOUND)
+                            return
+                        if "label" in data:
+                            conn.execute(
+                                "UPDATE header_config SET label = ? WHERE id = ?",
+                                (str(data.get("label", "")).strip(), cell_id),
+                            )
+                        if "colspan" in data:
+                            conn.execute(
+                                "UPDATE header_config SET colspan = ? WHERE id = ?",
+                                (int(data["colspan"]), cell_id),
+                            )
+                        if "rowspan" in data:
+                            conn.execute(
+                                "UPDATE header_config SET rowspan = ? WHERE id = ?",
+                                (int(data["rowspan"]), cell_id),
+                            )
+                        log_audit(conn, user["id"], "update_header_cell", f"header_cell:{cell_id}", data)
+                    self.send_json({"ok": True})
+                    return
             self.send_error_json("接口不存在", HTTPStatus.NOT_FOUND)
         except Exception as exc:
             traceback.print_exc()
@@ -1619,6 +1720,39 @@ class AppHandler(BaseHTTPRequestHandler):
                         return
                     conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
                     log_audit(conn, user["id"], "delete_user", f"user:{target_id}", {})
+                    self.send_json({"ok": True})
+                    return
+                if path.startswith("/api/header-config/"):
+                    if not self.require_role("admin"):
+                        return
+                    # DELETE /api/header-config/row/{row_idx}
+                    if path.startswith("/api/header-config/row/"):
+                        row_idx = int(path.rsplit("/", 1)[1])
+                        conn.execute("DELETE FROM header_config WHERE row_idx = ?", (row_idx,))
+                        conn.execute(
+                            "UPDATE header_config SET row_idx = row_idx - 1 WHERE row_idx > ?",
+                            (row_idx,),
+                        )
+                        log_audit(conn, user["id"], "delete_header_row", f"row:{row_idx}", {})
+                        self.send_json({"ok": True})
+                        return
+                    # DELETE /api/header-config/col/{col_idx}
+                    if path.startswith("/api/header-config/col/"):
+                        col_idx = int(path.rsplit("/", 1)[1])
+                        conn.execute("DELETE FROM header_config WHERE col_idx = ?", (col_idx,))
+                        conn.execute(
+                            "UPDATE header_config SET col_idx = col_idx - 1 WHERE col_idx > ?",
+                            (col_idx,),
+                        )
+                        log_audit(conn, user["id"], "delete_header_col", f"col:{col_idx}", {})
+                        self.send_json({"ok": True})
+                        return
+                    # DELETE /api/header-config/{id}
+                    cell_id = int(path.rsplit("/", 1)[1])
+                    existing = conn.execute("SELECT row_idx, col_idx FROM header_config WHERE id = ?", (cell_id,)).fetchone()
+                    if existing:
+                        conn.execute("DELETE FROM header_config WHERE id = ?", (cell_id,))
+                        log_audit(conn, user["id"], "delete_header_cell", f"header:{existing['row_idx']},{existing['col_idx']}", {})
                     self.send_json({"ok": True})
                     return
             self.send_error_json("接口不存在", HTTPStatus.NOT_FOUND)

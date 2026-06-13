@@ -1814,3 +1814,74 @@ dialog::backdrop {
     flex-direction: column;
   }
 }
+
+/* ---- header config table ---- */
+.header-config-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.header-config-table {
+  width: max-content;
+  border-collapse: separate;
+  border-spacing: 4px;
+}
+
+.header-config-cell {
+  min-width: 120px;
+  height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .82);
+  text-align: center;
+  vertical-align: middle;
+  cursor: default;
+  user-select: none;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+
+.header-config-cell:hover {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px rgba(15, 118, 107, .1);
+}
+
+.header-config-cell.editing {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px rgba(15, 118, 107, .22);
+  background: #fff;
+  cursor: text;
+  user-select: text;
+  outline: none;
+}
+
+.header-config-row-del,
+.header-config-col-dels {
+  min-width: 36px;
+  width: 36px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.header-config-row-del button,
+.header-config-col-dels button {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  transition: color .12s ease, background .12s ease, border-color .12s ease;
+}
+
+.header-config-row-del button:hover,
+.header-config-col-dels button:hover {
+  color: var(--danger);
+  background: rgba(180, 35, 24, .07);
+  border-color: rgba(180, 35, 24, .22);
+}
