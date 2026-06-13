@@ -56,6 +56,81 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+def get_upload_root(conn: sqlite3.Connection) -> Path:
+    configured = (get_setting(conn, "upload_dir") or "uploads").strip() or "uploads"
+    root = Path(configured)
+    if not root.is_absolute():
+        root = ROOT / root
+    return root.resolve()
+
+
+def format_user_file_id(user_id: int) -> str:
+    return f"{int(user_id):04d}"
+
+
+def avatar_dir(conn: sqlite3.Connection) -> Path:
+    return get_upload_root(conn) / "UserPic"
+
+
+def detect_avatar_extension(content: bytes) -> str:
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "webp"
+    return ""
+
+
+def avatar_file_for_user(conn: sqlite3.Connection, user_id: int, extension: str) -> Path:
+    return avatar_dir(conn) / f"{format_user_file_id(user_id)}.{extension}"
+
+
+def find_avatar_file_for_user(conn: sqlite3.Connection, user_id: int) -> Path | None:
+    base = format_user_file_id(user_id)
+    for extension in ("png", "jpg", "jpeg", "webp"):
+        target = avatar_dir(conn) / f"{base}.{extension}"
+        if target.exists():
+            return target
+    return None
+
+
+def avatar_url_for_user(conn: sqlite3.Connection, user_id: int) -> str:
+    target = find_avatar_file_for_user(conn, user_id)
+    if not target:
+        return ""
+    version = target.stat().st_mtime_ns
+    return f"/uploads/UserPic/{target.name}?v={version}"
+
+
+def user_payload(conn: sqlite3.Connection, row: sqlite3.Row | dict) -> dict:
+    keys = set(row.keys()) if hasattr(row, "keys") else set(row)
+    group_id = row["group_id"] if "group_id" in keys else None
+    group_name = row["group_name"] if "group_name" in keys else ""
+    return {
+        "id": row["id"],
+        "group_id": group_id,
+        "group_name": group_name or "",
+        "username": row["username"],
+        "email": row["email"] if "email" in keys else "",
+        "avatar_url": avatar_url_for_user(conn, row["id"]),
+    }
+
+
+def session_payload(conn: sqlite3.Connection, row: sqlite3.Row | dict) -> dict:
+    payload = user_payload(conn, row)
+    payload["role"] = row["role"]
+    return payload
+
+
+def permissions_payload(user: dict | None) -> dict:
+    return {"admin": bool(user and user.get("role") == "admin")}
+
+
+def email_service_configured(conn: sqlite3.Connection) -> bool:
+    return bool(get_setting(conn, "smtp_host") and get_setting(conn, "smtp_user") and get_setting(conn, "smtp_pass"))
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -109,7 +184,7 @@ def send_email_code(to_email: str, code: str) -> None:
     msg["To"] = to_email
     html = f"""\
 <html><body style="font-family:sans-serif;padding:20px;">
-<h2 style="color:#136f63;">PSL 产品选型清单</h2>
+<h2 style="color:#136f63;">PSL 产品选型</h2>
 <p>您的注册验证码是：</p>
 <div style="font-size:28px;font-weight:bold;letter-spacing:6px;color:#136f63;padding:12px 20px;background:#eef6f5;border-radius:6px;display:inline-block;">{code}</div>
 <p style="color:#888;margin-top:16px;">验证码 {CODE_EXPIRE_MINUTES} 分钟内有效，请勿转发。</p>
@@ -854,9 +929,28 @@ class AppHandler(BaseHTTPRequestHandler):
                 with connect() as conn:
                     self.send_json(get_catalog(conn, can_view_sensitive=bool(user)))
                 return
+            if path == "/api/register-status":
+                with connect() as conn:
+                    self.send_json({"email_configured": email_service_configured(conn)})
+                return
             if path == "/api/me":
                 user = self.current_user()
-                self.send_json({"user": user})
+                response_user = None
+                if user:
+                    with connect() as conn:
+                        row = conn.execute(
+                            """
+                            SELECT u.*, COALESCE(g.name, '') AS group_name
+                            FROM users u
+                            LEFT JOIN user_groups g ON g.id = u.group_id
+                            WHERE u.id = ?
+                            """,
+                            (user["id"],),
+                        ).fetchone()
+                        if row:
+                            user.update(session_payload(conn, row))
+                            response_user = user_payload(conn, row)
+                self.send_json({"user": response_user, "permissions": permissions_payload(user)})
                 return
             if path == "/api/audit":
                 user = self.require_user()
@@ -902,18 +996,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not user:
                     return
                 with connect() as conn:
-                    rows = [
-                        row_to_dict(row)
-                        for row in conn.execute(
+                    rows = []
+                    for row in conn.execute(
                             """
-                            SELECT u.id, u.username, u.display_name, u.role, u.group_id, u.created_at,
+                            SELECT u.id, u.username, u.email, u.group_id, u.created_at,
                                    COALESCE(g.name, '') AS group_name
                             FROM users u
                             LEFT JOIN user_groups g ON g.id = u.group_id
                             ORDER BY u.id ASC
                             """
-                        )
-                    ]
+                    ):
+                        item = row_to_dict(row)
+                        item["avatar_url"] = avatar_url_for_user(conn, row["id"])
+                        rows.append(item)
                 self.send_json({"users": rows})
                 return
             if path == "/api/template.csv":
@@ -933,6 +1028,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     settings = {row["key"]: row["value"] for row in rows}
                 self.send_json({"settings": settings})
                 return
+            if path.startswith("/uploads/"):
+                self.serve_upload(path)
+                return
             self.serve_static(path)
         except Exception as exc:
             traceback.print_exc()
@@ -949,6 +1047,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_error_json("请输入有效的邮箱地址")
                     return
                 with connect() as conn:
+                    if not email_service_configured(conn):
+                        self.send_error_json("管理后台尚未配置邮箱服务，暂时无法注册")
+                        return
                     # Check if email already registered
                     existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
                     if existing:
@@ -986,15 +1087,17 @@ class AppHandler(BaseHTTPRequestHandler):
                 email = (data.get("email") or "").strip().lower()
                 code = (data.get("code") or "").strip()
                 username = (data.get("username") or "").strip()
-                display_name = (data.get("display_name") or "").strip()
                 password = (data.get("password") or "").strip()
-                if not email or not code or not username or not display_name or not password:
+                if not email or not code or not username or not password:
                     self.send_error_json("请填写所有字段")
                     return
                 if len(password) < 6:
                     self.send_error_json("密码至少 6 位")
                     return
                 with connect() as conn:
+                    if not email_service_configured(conn):
+                        self.send_error_json("管理后台尚未配置邮箱服务，暂时无法注册")
+                        return
                     # Verify code
                     now_naive = datetime.now(timezone.utc).astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
                     row = conn.execute(
@@ -1035,7 +1138,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         """,
                         (
                             username,
-                            display_name,
+                            username,
                             "viewer",
                             hash_password(password),
                             email,
@@ -1047,31 +1150,44 @@ class AppHandler(BaseHTTPRequestHandler):
                     log_audit(conn, new_id, "register", f"user:{new_id}", {"email": email, "username": username})
                 # Auto login
                 token = secrets.token_urlsafe(32)
-                user = {
-                    "id": new_id,
-                    "username": username,
-                    "display_name": display_name,
-                    "role": "viewer",
-                }
-                SESSIONS[token] = user
-                self.send_json({"token": token, "user": user})
+                with connect() as conn:
+                    created_user = conn.execute(
+                        """
+                        SELECT u.*, COALESCE(g.name, '') AS group_name
+                        FROM users u
+                        LEFT JOIN user_groups g ON g.id = u.group_id
+                        WHERE u.id = ?
+                        """,
+                        (new_id,),
+                    ).fetchone()
+                    session_user = session_payload(conn, created_user)
+                    response_user = user_payload(conn, created_user)
+                SESSIONS[token] = session_user
+                self.send_json({"token": token, "user": response_user, "permissions": permissions_payload(session_user)})
                 return
             if path == "/api/login":
                 data = self.read_json()
+                identifier = (data.get("identifier") or data.get("username") or "").strip()
+                lookup_id = int(identifier) if identifier.isdigit() else -1
                 with connect() as conn:
-                    row = conn.execute("SELECT * FROM users WHERE username = ?", (data.get("username"),)).fetchone()
+                    row = conn.execute(
+                        """
+                        SELECT u.*, COALESCE(g.name, '') AS group_name
+                        FROM users u
+                        LEFT JOIN user_groups g ON g.id = u.group_id
+                        WHERE u.username = ? OR LOWER(u.email) = LOWER(?) OR u.id = ?
+                        """,
+                        (identifier, identifier, lookup_id),
+                    ).fetchone()
                 if not row or not verify_password(data.get("password", ""), row["password_hash"]):
                     self.send_error_json("账号或密码错误", HTTPStatus.UNAUTHORIZED)
                     return
                 token = secrets.token_urlsafe(32)
-                user = {
-                    "id": row["id"],
-                    "username": row["username"],
-                    "display_name": row["display_name"],
-                    "role": row["role"],
-                }
-                SESSIONS[token] = user
-                self.send_json({"token": token, "user": user})
+                with connect() as conn:
+                    session_user = session_payload(conn, row)
+                    response_user = user_payload(conn, row)
+                SESSIONS[token] = session_user
+                self.send_json({"token": token, "user": response_user, "permissions": permissions_payload(session_user)})
                 return
             if path == "/api/logout":
                 auth = self.headers.get("Authorization", "")
@@ -1112,6 +1228,12 @@ class AppHandler(BaseHTTPRequestHandler):
                     return
                 self.handle_upload(user)
                 return
+            if path == "/api/avatar":
+                user = self.require_user()
+                if not user:
+                    return
+                self.handle_avatar_upload(user)
+                return
             if path == "/api/user-groups":
                 user = self.require_role("admin")
                 if not user:
@@ -1138,16 +1260,23 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not user:
                     return
                 data = self.read_json()
-                missing = require_columns(data, ["username", "password"])
+                missing = require_columns(data, ["username", "email", "password"])
                 if missing:
                     self.send_error_json(f"缺少字段：{', '.join(missing)}")
                     return
-                role = data.get("role", "viewer")
-                if role not in {"admin", "editor", "viewer"}:
-                    self.send_error_json("角色必须是 admin、editor 或 viewer")
+                role = "viewer"
+                email = (data.get("email") or "").strip().lower()
+                if "@" not in email or "." not in email:
+                    self.send_error_json("请输入有效的邮箱地址")
                     return
                 group_id = data.get("group_id")
                 with connect() as conn:
+                    if conn.execute("SELECT id FROM users WHERE username = ?", (data["username"].strip(),)).fetchone():
+                        self.send_error_json("用户名已存在")
+                        return
+                    if conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone():
+                        self.send_error_json("邮箱已存在")
+                        return
                     if group_id:
                         group_id = int(group_id)
                         if not conn.execute("SELECT id FROM user_groups WHERE id = ?", (group_id,)).fetchone():
@@ -1157,19 +1286,20 @@ class AppHandler(BaseHTTPRequestHandler):
                         group_id = None
                     cursor = conn.execute(
                         """
-                        INSERT INTO users(username, display_name, role, password_hash, group_id, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO users(username, display_name, role, password_hash, email, group_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             data["username"].strip(),
-                            data.get("display_name", data["username"]).strip() or data["username"].strip(),
+                            data["username"].strip(),
                             role,
                             hash_password(data["password"]),
+                            email,
                             group_id,
                             now_iso(),
                         ),
                     )
-                    log_audit(conn, user["id"], "create_user", f"user:{cursor.lastrowid}", {"username": data["username"], "role": role})
+                    log_audit(conn, user["id"], "create_user", f"user:{cursor.lastrowid}", {"username": data["username"], "email": email})
                 self.send_json({"id": cursor.lastrowid})
                 return
             self.send_error_json("接口不存在", HTTPStatus.NOT_FOUND)
@@ -1186,6 +1316,43 @@ class AppHandler(BaseHTTPRequestHandler):
             path = parsed.path
             data = self.read_json()
             with connect() as conn:
+                if path == "/api/profile":
+                    password = (data.get("password") or "").strip()
+                    username = (data.get("username") or "").strip()
+                    if not password and not username:
+                        self.send_error_json("没有需要更新的内容")
+                        return
+                    if password:
+                        if len(password) < 6:
+                            self.send_error_json("密码至少 6 位")
+                            return
+                        conn.execute(
+                            "UPDATE users SET password_hash = ? WHERE id = ?",
+                            (hash_password(password), user["id"]),
+                        )
+                    if username:
+                        existing = conn.execute(
+                            "SELECT id FROM users WHERE username = ? AND id != ?",
+                            (username, user["id"]),
+                        ).fetchone()
+                        if existing:
+                            self.send_error_json("用户名已被占用")
+                            return
+                        conn.execute(
+                            "UPDATE users SET username = ? WHERE id = ?",
+                            (username, user["id"]),
+                        )
+                    fresh = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+                    payload = user_payload(conn, fresh)
+                    user.update(payload)
+                    audit_detail = {}
+                    if password:
+                        audit_detail["password"] = "***"
+                    if username:
+                        audit_detail["username"] = username
+                    log_audit(conn, user["id"], "update_profile", f"user:{user['id']}", audit_detail)
+                    self.send_json({"user": payload})
+                    return
                 if path.startswith("/api/products/"):
                     product_id = int(path.rsplit("/", 1)[1])
                     existing = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
@@ -1311,10 +1478,16 @@ class AppHandler(BaseHTTPRequestHandler):
                     if duplicate:
                         self.send_error_json("账号已存在")
                         return
-                    display_name = data.get("display_name", username).strip() or username
-                    role = data.get("role", existing["role"])
-                    if role not in {"admin", "editor", "viewer"}:
-                        self.send_error_json("角色必须是 admin、editor 或 viewer")
+                    email = (data.get("email", existing["email"] or "") or "").strip().lower()
+                    if "@" not in email or "." not in email:
+                        self.send_error_json("请输入有效的邮箱地址")
+                        return
+                    email_duplicate = conn.execute(
+                        "SELECT id FROM users WHERE email = ? AND id <> ?",
+                        (email, target_id),
+                    ).fetchone()
+                    if email_duplicate:
+                        self.send_error_json("邮箱已存在")
                         return
                     group_id = data.get("group_id", existing["group_id"])
                     if group_id is not None:
@@ -1327,13 +1500,13 @@ class AppHandler(BaseHTTPRequestHandler):
                         conn.execute(
                             """
                             UPDATE users
-                            SET username = ?, display_name = ?, role = ?, password_hash = ?, group_id = ?
+                            SET username = ?, display_name = ?, email = ?, password_hash = ?, group_id = ?
                             WHERE id = ?
                             """,
                             (
                                 username,
-                                display_name,
-                                role,
+                                username,
+                                email,
                                 hash_password(data["password"]),
                                 group_id,
                                 target_id,
@@ -1341,10 +1514,10 @@ class AppHandler(BaseHTTPRequestHandler):
                         )
                     else:
                         conn.execute(
-                            "UPDATE users SET username = ?, display_name = ?, role = ?, group_id = ? WHERE id = ?",
-                            (username, display_name, role, group_id, target_id),
+                            "UPDATE users SET username = ?, display_name = ?, email = ?, group_id = ? WHERE id = ?",
+                            (username, username, email, group_id, target_id),
                         )
-                    log_audit(conn, user["id"], "update_user", f"user:{target_id}", {"role": role})
+                    log_audit(conn, user["id"], "update_user", f"user:{target_id}", {"email": email})
                     self.send_json({"ok": True})
                     return
                 if path == "/api/settings":
@@ -1447,6 +1620,82 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error_json(summary["error"])
         else:
             self.send_json({"summary": summary})
+
+    def handle_avatar_upload(self, user: dict) -> None:
+        content_type = self.headers.get("Content-Type", "")
+        length = int(self.headers.get("Content-Length", "0"))
+        fields = parse_multipart(content_type, self.rfile.read(length))
+        file_field = fields.get("avatar")
+        if not file_field or not file_field["content"]:
+            self.send_error_json("请选择头像图片")
+            return
+        content = file_field["content"]
+        if len(content) > 3 * 1024 * 1024:
+            self.send_error_json("头像图片不能超过 3MB")
+            return
+        extension = detect_avatar_extension(content)
+        if not extension:
+            self.send_error_json("头像仅支持 PNG、JPG、WEBP 格式")
+            return
+        target_user_id = user["id"]
+        user_id_field = fields.get("user_id")
+        if user_id_field and user_id_field["content"]:
+            try:
+                requested_user_id = int(user_id_field["content"].decode("utf-8").strip())
+            except ValueError:
+                self.send_error_json("用户ID无效")
+                return
+            if requested_user_id != user["id"] and user.get("role") != "admin":
+                self.send_error_json("当前账号没有操作权限", HTTPStatus.FORBIDDEN)
+                return
+            target_user_id = requested_user_id
+        with connect() as conn:
+            if not conn.execute("SELECT id FROM users WHERE id = ?", (target_user_id,)).fetchone():
+                self.send_error_json("用户不存在", HTTPStatus.NOT_FOUND)
+                return
+            target_dir = avatar_dir(conn)
+            target = avatar_file_for_user(conn, target_user_id, extension)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            for old_file in list(target_dir.glob(f"{format_user_file_id(target_user_id)}.*")) + list(target_dir.glob(f"{int(target_user_id)}.*")):
+                if old_file.is_file():
+                    old_file.unlink()
+            target.write_bytes(content)
+            fresh = conn.execute(
+                """
+                SELECT u.*, COALESCE(g.name, '') AS group_name
+                FROM users u
+                LEFT JOIN user_groups g ON g.id = u.group_id
+                WHERE u.id = ?
+                """,
+                (target_user_id,),
+            ).fetchone()
+            payload = user_payload(conn, fresh)
+            if target_user_id == user["id"]:
+                user.update(session_payload(conn, fresh))
+            log_audit(conn, user["id"], "upload_avatar", f"user:{target_user_id}", {})
+        self.send_json({"user": payload, "avatar_url": payload["avatar_url"]})
+
+    def serve_upload(self, path: str) -> None:
+        with connect() as conn:
+            upload_root = get_upload_root(conn)
+        relative = path.removeprefix("/uploads/").split("?", 1)[0]
+        if not relative.startswith("UserPic/"):
+            self.send_error(HTTPStatus.FORBIDDEN)
+            return
+        target = (upload_root / relative).resolve()
+        if target != upload_root and upload_root not in target.parents:
+            self.send_error(HTTPStatus.FORBIDDEN)
+            return
+        if not target.exists() or not target.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        data = target.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def serve_static(self, path: str) -> None:
         if path in {"", "/"}:

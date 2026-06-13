@@ -1,6 +1,7 @@
 const state = {
   token: localStorage.getItem("psl_token") || "",
   user: null,
+  permissions: { admin: false },
   catalog: null,
   editMode: false,
   filters: { q: "", series: "", tag: "", parameterId: "", min: "", max: "" },
@@ -49,7 +50,7 @@ function roleCanEdit() {
 }
 
 function roleIsAdmin() {
-  return state.user && state.user.role === "admin";
+  return Boolean(state.permissions?.admin);
 }
 
 function productValue(productId, parameterId) {
@@ -199,6 +200,7 @@ async function loadCatalog() {
 async function restoreSession() {
   if (!state.token) {
     state.user = null;
+    state.permissions = { admin: false };
     showMain();
     await loadCatalog();
     return;
@@ -206,9 +208,13 @@ async function restoreSession() {
   try {
     const data = await api("/api/me");
     state.user = data.user || null;
+    state.permissions = data.permissions || { admin: false };
     if (!state.user) {
       localStorage.removeItem("psl_token");
       state.token = "";
+      state.permissions = { admin: false };
+    } else {
+      state.editMode = false;
     }
     showMain();
     await loadCatalog();
@@ -216,6 +222,7 @@ async function restoreSession() {
     localStorage.removeItem("psl_token");
     state.token = "";
     state.user = null;
+    state.permissions = { admin: false };
     showMain();
     await loadCatalog();
   }
@@ -229,6 +236,28 @@ function showLogin() {
   $("#registerForm").classList.add("hidden");
 }
 
+async function refreshRegisterAvailability() {
+  const hint = $("#registerStatusHint");
+  const controls = $$("#registerForm input, #registerForm button");
+  try {
+    const data = await api("/api/register-status", { headers: {} });
+    const available = Boolean(data.email_configured);
+    controls.forEach((control) => { control.disabled = !available; });
+    if (hint) {
+      hint.textContent = available
+        ? "注册后自动分配至默认用户组"
+        : "管理后台尚未配置邮箱服务，暂时无法注册";
+      hint.dataset.type = available ? "" : "error";
+    }
+  } catch (error) {
+    controls.forEach((control) => { control.disabled = true; });
+    if (hint) {
+      hint.textContent = "无法检查邮箱服务配置，暂时无法注册";
+      hint.dataset.type = "error";
+    }
+  }
+}
+
 function showMain() {
   $("#loginDialog").close();
   $("#mainView").classList.remove("hidden");
@@ -239,25 +268,79 @@ function updateAuthUI() {
   const signedIn = Boolean(state.user);
   $("#loginBtn").classList.toggle("hidden", signedIn);
   $("#avatarBtn").classList.toggle("hidden", !signedIn);
+  $("#dataManageBtn").classList.toggle("hidden", !signedIn);
   if (signedIn) {
-    const initial = (state.user.display_name || state.user.username || "?")[0];
-    $("#avatarInitial").textContent = initial;
+    const initial = userInitial();
+    setAvatarDisplay($("#avatarImage"), $("#avatarInitial"), state.user.avatar_url, initial);
     // Show/hide admin entry
-    $("#adminEntryBtn").classList.toggle("hidden", state.user.role !== "admin");
-    // Show/hide data manage entry (visible for all logged-in users)
-    $("#dataManageBtn").classList.toggle("hidden", false);
+    $("#adminEntryBtn").classList.toggle("hidden", !roleIsAdmin());
     // Update data manage label based on editMode
     updateDataManageLabel();
     closeAvatarMenu();
   } else {
     state.editMode = false;
+    state.permissions = { admin: false };
     document.body.classList.remove("editing-mode");
   }
 }
 
 function updateDataManageLabel() {
   $("#dataManageBtn").classList.toggle("active", state.editMode);
-  $("#dataManageBtn").textContent = state.editMode ? "📊 数据管理 ✏" : "📊 数据管理";
+  $("#dataManageBtn").textContent = state.editMode ? "编辑模式" : "阅览模式";
+}
+
+function userInitial() {
+  return (state.user?.username || "?")[0];
+}
+
+function setAvatarDisplay(imageEl, initialEl, avatarUrl, initial) {
+  if (!imageEl || !initialEl) return;
+  const avatarButton = imageEl.closest(".avatar-btn");
+  initialEl.textContent = initial || "?";
+  if (avatarUrl) {
+    imageEl.src = avatarUrl;
+    imageEl.classList.remove("hidden");
+    initialEl.classList.add("hidden");
+    avatarButton?.classList.add("has-avatar");
+  } else {
+    imageEl.removeAttribute("src");
+    imageEl.classList.add("hidden");
+    initialEl.classList.remove("hidden");
+    avatarButton?.classList.remove("has-avatar");
+  }
+}
+
+async function toggleDataManageMode() {
+  if (!state.user) return;
+  state.editMode = !state.editMode;
+  updateDataManageLabel();
+  document.body.classList.toggle("editing-mode", state.editMode);
+  await loadCatalog();
+  showMessage(state.editMode ? "已切换至编辑模式" : "已切换至阅览模式");
+}
+
+async function uploadAvatarFile(file, userId = "") {
+  if (!file) return null;
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    throw new Error("头像仅支持 PNG、JPG、WEBP 格式");
+  }
+  if (file.size > 3 * 1024 * 1024) {
+    throw new Error("头像图片不能超过 3MB");
+  }
+  const form = new FormData();
+  form.append("avatar", file, file.name);
+  if (userId) form.append("user_id", userId);
+  return api("/api/avatar", { method: "POST", body: form });
+}
+
+function chooseAvatarFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".png,.jpg,.jpeg,.webp";
+    input.addEventListener("change", () => resolve(input.files?.[0] || null), { once: true });
+    input.click();
+  });
 }
 
 function openProductDialog(product = null) {
@@ -659,10 +742,13 @@ function closeAvatarMenu() {
 function openProfile() {
   if (!state.user) return;
   const f = $("#profileForm");
+  f.user_id.value = formatUserId(state.user.id);
+  f.group_name.value = state.user.group_name || "未分组";
   f.username.value = state.user.username;
-  f.display_name.value = state.user.display_name || "";
-  f.role.value = state.user.role || "";
+  f.email.value = state.user.email || "";
   f.password.value = "";
+  $("#avatarUploadInput").value = "";
+  setAvatarDisplay($("#profileAvatarImage"), $("#profileAvatarInitial"), state.user.avatar_url, userInitial());
   $("#profileDialog").showModal();
 }
 
@@ -810,16 +896,20 @@ function renderAdminUserList(users) {
     <table class="admin-member-table">
       <colgroup>
         <col class="admin-member-id-col" />
-        <col class="admin-member-account-col" />
         <col class="admin-member-group-col" />
+        <col class="admin-member-avatar-col" />
+        <col class="admin-member-account-col" />
+        <col class="admin-member-email-col" />
         <col class="admin-member-password-col" />
         <col class="admin-member-actions-col" />
       </colgroup>
       <thead>
         <tr>
           <th>用户ID</th>
-          <th>账号</th>
           <th>用户组</th>
+          <th>用户头像</th>
+          <th>用户名</th>
+          <th>邮箱</th>
           <th>密码</th>
           <th>操作</th>
         </tr>
@@ -827,7 +917,7 @@ function renderAdminUserList(users) {
       <tbody>
         ${users.map((user) => adminUserRowHtml(user)).join("")}
         <tr class="admin-member-add-row">
-          <td colspan="5"><button class="add-row-button" type="button" data-add-user-row>＋</button></td>
+          <td colspan="7"><button class="add-row-button" type="button" data-add-user-row>＋</button></td>
         </tr>
       </tbody>
     </table>
@@ -850,11 +940,16 @@ function adminUserRowHtml(user, options = {}) {
   const editing = Boolean(options.editing);
   const isNew = Boolean(options.isNew);
   const currentUserId = String(state.user?.id || "");
+  const avatarContent = user.avatar_url
+    ? `<img class="member-avatar" src="${escapeHtml(user.avatar_url)}" alt="" />`
+    : `<span class="member-avatar-placeholder">${escapeHtml((user.username || "?")[0])}</span>`;
   return `
     <tr class="admin-member-row ${editing ? "editing" : ""}" data-user-id="${isNew ? "" : user.id}" data-new-user="${isNew ? "1" : "0"}">
       <td class="member-id">${isNew ? "" : formatUserId(user.id)}</td>
-      <td><input name="username" value="${escapeHtml(user.username || "")}" placeholder="账号" ${editing && isNew ? "" : "disabled"} /></td>
       <td><select name="group_id" ${editing ? "" : "disabled"}>${adminGroupOptions(user.group_id)}</select></td>
+      <td class="member-avatar-cell">${!isNew && editing ? `<button class="member-avatar-button" type="button" data-upload-member-avatar title="上传头像">${avatarContent}</button>` : avatarContent}</td>
+      <td><input name="username" value="${escapeHtml(user.username || "")}" placeholder="用户名" ${editing ? "" : "disabled"} /></td>
+      <td><input name="email" value="${escapeHtml(user.email || "")}" placeholder="邮箱" type="email" ${editing ? "" : "disabled"} /></td>
       <td><input name="password" value="" placeholder="${isNew ? "初始密码" : "留空不修改"}" type="password" ${editing ? "" : "disabled"} /></td>
       <td class="member-row-actions">
         ${editing
@@ -866,6 +961,14 @@ function adminUserRowHtml(user, options = {}) {
 }
 
 function setAdminUserRowEditing(row, editing) {
+  if (editing && row.dataset.newUser !== "1") {
+    const user = (state.adminUsers || []).find((item) => String(item.id) === row.dataset.userId);
+    if (user) {
+      row.outerHTML = adminUserRowHtml(user, { editing: true });
+      $(`#adminUsersList .admin-member-row[data-user-id="${row.dataset.userId}"] select[name='group_id']`)?.focus();
+      return;
+    }
+  }
   row.classList.toggle("editing", editing);
   row.querySelectorAll("input, select").forEach((field) => {
     field.disabled = !editing;
@@ -873,7 +976,7 @@ function setAdminUserRowEditing(row, editing) {
   row.querySelector(".member-row-actions").innerHTML = editing
     ? `<button class="primary" type="button" data-save-user-row>保存</button><button type="button" data-cancel-user-row>取消</button>`
     : `<button type="button" data-edit-user>编辑</button><button type="button" data-delete-user ${String(state.user?.id || "") === row.dataset.userId ? "disabled" : ""}>删除</button>`;
-  if (editing) row.querySelector("input[name='username']")?.focus();
+  if (editing) row.querySelector("select[name='group_id']")?.focus();
 }
 
 function restoreAdminUserRow(row) {
@@ -884,6 +987,7 @@ function restoreAdminUserRow(row) {
   const user = (state.adminUsers || []).find((item) => String(item.id) === row.dataset.userId);
   if (!user) return;
   row.querySelector("input[name='username']").value = user.username || "";
+  row.querySelector("input[name='email']").value = user.email || "";
   row.querySelector("select[name='group_id']").value = user.group_id || "";
   row.querySelector("input[name='password']").value = "";
   setAdminUserRowEditing(row, false);
@@ -896,8 +1000,8 @@ function filteredAdminUsers() {
 
 function expandNewAdminUserRow(row) {
   const filterGroupId = $("#adminMemberGroupFilter")?.value || "";
-  row.outerHTML = adminUserRowHtml({ username: "", group_id: filterGroupId }, { editing: true, isNew: true });
-  $("#adminUsersList .admin-member-row[data-new-user='1'] input[name='username']")?.focus();
+  row.outerHTML = adminUserRowHtml({ username: "", email: "", group_id: filterGroupId }, { editing: true, isNew: true });
+  $("#adminUsersList .admin-member-row[data-new-user='1'] select[name='group_id']")?.focus();
 }
 
 async function saveAdminUserGroup() {
@@ -915,6 +1019,13 @@ async function saveAdminUserGroup() {
 async function saveAdminUser() {
   const form = $("#adminUserForm");
   const data = Object.fromEntries(new FormData(form).entries());
+  data.username = (data.username || "").trim();
+  data.email = (data.email || "").trim();
+  if (!data.username) { showMessage("用户名不能为空", "error"); return; }
+  if (!data.email || !data.email.includes("@") || !data.email.includes(".")) {
+    showMessage("请输入有效的邮箱地址", "error");
+    return;
+  }
   if (!data.password && !data.id) { showMessage("新增用户需要填写密码", "error"); return; }
   const selectedGroup = $("#adminView").dataset.selectedGroup || "";
   if (selectedGroup) data.group_id = Number(selectedGroup);
@@ -975,6 +1086,8 @@ function bindEvents() {
       const data = await api("/api/login", { method: "POST", body: JSON.stringify(payload), headers: {} });
       state.token = data.token;
       state.user = data.user;
+      state.permissions = data.permissions || { admin: false };
+      state.editMode = false;
       localStorage.setItem("psl_token", state.token);
       showMain();
       await loadCatalog();
@@ -993,6 +1106,7 @@ function bindEvents() {
       $$(".login-tab").forEach(t => t.classList.toggle("active", t === tab));
       $("#loginForm").classList.toggle("hidden", tab.dataset.tab !== "login");
       $("#registerForm").classList.toggle("hidden", tab.dataset.tab !== "register");
+      if (tab.dataset.tab === "register") refreshRegisterAvailability();
     });
   });
 
@@ -1033,7 +1147,7 @@ function bindEvents() {
   $("#registerForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    if (!payload.email || !payload.code || !payload.username || !payload.display_name || !payload.password) {
+    if (!payload.email || !payload.code || !payload.username || !payload.password) {
       showMessage("请填写所有字段", "error");
       return;
     }
@@ -1045,6 +1159,8 @@ function bindEvents() {
       const data = await api("/api/register", { method: "POST", body: JSON.stringify(payload), headers: {} });
       state.token = data.token;
       state.user = data.user;
+      state.permissions = data.permissions || { admin: false };
+      state.editMode = false;
       localStorage.setItem("psl_token", state.token);
       showMain();
       await loadCatalog();
@@ -1057,6 +1173,9 @@ function bindEvents() {
   $("#avatarBtn").addEventListener("click", () => {
     $("#avatarMenu").classList.toggle("hidden");
   });
+  $("#dataManageBtn").addEventListener("click", async () => {
+    await toggleDataManageMode();
+  });
   document.addEventListener("click", (event) => {
     if (!$("#avatarMenu").classList.contains("hidden") && !event.target.closest("#avatarBtn") && !event.target.closest("#avatarMenu")) {
       closeAvatarMenu();
@@ -1068,19 +1187,13 @@ function bindEvents() {
     if (!action) return;
     closeAvatarMenu();
     if (action === "profile") openProfile();
-    else if (action === "dataManage") {
-      state.editMode = !state.editMode;
-      updateDataManageLabel();
-      document.body.classList.toggle("editing-mode", state.editMode);
-      await loadCatalog();
-      showMessage(state.editMode ? "数据管理已开启，表格可编辑" : "数据管理已关闭");
-    }
     else if (action === "admin") showAdminPanel();
     else if (action === "logout") {
       await api("/api/logout", { method: "POST", body: JSON.stringify({}) }).catch(() => {});
       localStorage.removeItem("psl_token");
       state.token = "";
       state.user = null;
+      state.permissions = { admin: false };
       state.editMode = false;
       document.body.classList.remove("editing-mode");
       showMain();
@@ -1090,15 +1203,33 @@ function bindEvents() {
   // --- Profile dialog ---
   $("#closeProfileBtn").addEventListener("click", () => $("#profileDialog").close());
   $("#cancelProfileBtn").addEventListener("click", () => $("#profileDialog").close());
+  $("#avatarUploadInput").addEventListener("change", async (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file || !state.user) return;
+    try {
+      const data = await uploadAvatarFile(file);
+      state.user = data.user;
+      updateAuthUI();
+      setAvatarDisplay($("#profileAvatarImage"), $("#profileAvatarInitial"), state.user.avatar_url, userInitial());
+      showMessage("头像已更新");
+    } catch (error) {
+      showMessage(error.message, "error");
+    } finally {
+      event.currentTarget.value = "";
+    }
+  });
   $("#profileForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    if (!payload.display_name.trim()) { showMessage("显示名不能为空", "error"); return; }
-    const body = { display_name: payload.display_name.trim() };
-    if (payload.password) body.password = payload.password;
+    const username = (payload.username || "").trim();
+    const password = (payload.password || "").trim();
+    if (!username && !password) {
+      $("#profileDialog").close();
+      return;
+    }
     try {
-      const data = await api(`/api/users/${state.user.id}`, { method: "PUT", body: JSON.stringify(body) });
-      state.user.display_name = body.display_name;
+      const data = await api("/api/profile", { method: "PUT", body: JSON.stringify({ username: username || undefined, password: password || undefined }) });
+      state.user = data.user;
       updateAuthUI();
       $("#profileDialog").close();
       showMessage("个人资料已更新");
@@ -1198,6 +1329,20 @@ function bindEvents() {
     const save = event.target.closest("[data-save-user-row]");
     const cancel = event.target.closest("[data-cancel-user-row]");
     const remove = event.target.closest("[data-delete-user]");
+    const avatarUpload = event.target.closest("[data-upload-member-avatar]");
+    if (avatarUpload) {
+      if (!row.classList.contains("editing") || row.dataset.newUser === "1") return;
+      const file = await chooseAvatarFile();
+      if (!file) return;
+      try {
+        await uploadAvatarFile(file, row.dataset.userId);
+        await loadAdminUsers();
+        showMessage("成员头像已更新");
+      } catch (error) {
+        showMessage(error.message, "error");
+      }
+      return;
+    }
     if (edit) {
       setAdminUserRowEditing(row, true);
       return;
@@ -1209,11 +1354,17 @@ function bindEvents() {
     if (save) {
       const isNew = row.dataset.newUser === "1";
       const username = row.querySelector("input[name='username']").value.trim();
+      const email = row.querySelector("input[name='email']").value.trim();
       const groupId = row.querySelector("select[name='group_id']").value;
       const password = row.querySelector("input[name='password']").value.trim();
       if (!username) {
-        showMessage("账号不能为空", "error");
+        showMessage("用户名不能为空", "error");
         row.querySelector("input[name='username']").focus();
+        return;
+      }
+      if (!email || !email.includes("@") || !email.includes(".")) {
+        showMessage("请输入有效的邮箱地址", "error");
+        row.querySelector("input[name='email']").focus();
         return;
       }
       if (isNew && !password) {
@@ -1223,10 +1374,9 @@ function bindEvents() {
       }
       const payload = {
         username,
-        display_name: username,
+        email,
         group_id: groupId ? Number(groupId) : null,
       };
-      if (isNew) payload.role = "viewer";
       if (password) payload.password = password;
       const path = isNew ? "/api/users" : `/api/users/${row.dataset.userId}`;
       const method = isNew ? "POST" : "PUT";
@@ -1268,7 +1418,6 @@ function bindEvents() {
     }
   });
 
-  $("#refreshBtn").addEventListener("click", () => loadCatalog().then(() => showMessage("已刷新")));
   $("#addProductBtn").addEventListener("click", () => openProductManage());
   $("#uploadBtn").addEventListener("click", () => $("#uploadDialog").showModal());
   $("#templateBtn").addEventListener("click", () => openTemplateDialog());

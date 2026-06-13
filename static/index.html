@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PSL 产品选型清单</title>
+    <title>PSL 产品选型</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -17,7 +17,7 @@
         <div class="login-panel">
           <div>
             <p class="eyebrow">Product Selection List</p>
-            <h1>PSL 产品选型清单</h1>
+            <h1>PSL 产品选型</h1>
             <p class="muted">登录后可维护产品参数、上传模板、筛选型号并生成横向对比。</p>
           </div>
         <div class="login-forms">
@@ -27,7 +27,7 @@
           </div>
           <form id="loginForm" class="form-grid">
             <label>
-              <span>账号</span>
+              <span>用户ID / 用户名 / 邮箱</span>
               <input name="username" value="admin" autocomplete="username" />
             </label>
             <label>
@@ -55,15 +55,11 @@
               <input name="username" placeholder="登录用" autocomplete="username" />
             </label>
             <label>
-              <span>显示名</span>
-              <input name="display_name" placeholder="在页面上显示的名称" autocomplete="name" />
-            </label>
-            <label>
               <span>密码</span>
               <input name="password" type="password" placeholder="至少6位" autocomplete="new-password" />
             </label>
             <button class="primary" type="submit">注册并登录</button>
-            <p class="hint">注册后自动分配至默认用户组</p>
+            <p class="hint" id="registerStatusHint">注册后自动分配至默认用户组</p>
           </form>
         </div>
       </div>
@@ -77,25 +73,25 @@
             <h1>产品选型</h1>
           </div>
           <div class="top-actions">
+            <button id="dataManageBtn" class="mode-toggle hidden" type="button">阅览模式</button>
             <button id="avatarBtn" class="avatar-btn hidden" type="button" title="用户菜单">
+              <img id="avatarImage" class="avatar-image hidden" alt="" />
               <span id="avatarInitial" class="avatar-initial"></span>
             </button>
             <div id="avatarMenu" class="avatar-menu hidden">
               <button data-action="profile" type="button">👤 个人资料</button>
-              <button data-action="dataManage" type="button" id="dataManageBtn">📊 数据管理</button>
               <button data-action="admin" type="button" id="adminEntryBtn">⚙️ 管理后台</button>
               <hr />
               <button data-action="logout" type="button">🚪 退出登录</button>
             </div>
             <button id="loginBtn" class="ghost" type="button">登录</button>
-            <button id="refreshBtn" class="ghost" type="button">刷新</button>
           </div>
         </header>
 
         <details class="filter-drawer" id="filterDrawer">
           <summary>
-            <span class="drawer-title">筛选与数据维护</span>
-            <span class="drawer-meta" id="drawerMeta">点击展开筛选条件和操作按钮</span>
+            <span class="drawer-title">筛选</span>
+            <span class="drawer-meta" id="drawerMeta">点击展开筛选条件</span>
           </summary>
           <section class="toolbar">
             <div class="filters">
@@ -124,15 +120,17 @@
               <input id="maxFilter" inputmode="decimal" placeholder="不限" />
             </label>
             </div>
-            <div class="commands">
-            <a class="secondary role-admin" href="/api/template.csv">下载模板</a>
-            <button id="uploadBtn" class="secondary role-edit" type="button">上传数据</button>
-
-            <button id="templateBtn" class="secondary role-edit" type="button">表格模板</button>
-            <button id="addProductBtn" class="primary role-edit" type="button">产品管理</button>
-            </div>
           </section>
         </details>
+
+        <section class="maintenance-toolbar" aria-label="数据维护工具栏">
+          <div class="commands">
+            <a class="secondary role-admin" href="/api/template.csv">下载模板</a>
+            <button id="uploadBtn" class="secondary role-edit" type="button">上传模板</button>
+            <button id="templateBtn" class="secondary role-edit" type="button">表格模板</button>
+            <button id="addProductBtn" class="primary role-edit" type="button">产品管理</button>
+          </div>
+        </section>
 
         <section class="status-row">
           <div id="summary"></div>
@@ -222,7 +220,7 @@
     <dialog id="uploadDialog">
       <form id="uploadForm" method="dialog" class="dialog-body">
         <div class="dialog-head">
-          <h2>上传数据</h2>
+          <h2>上传模板</h2>
           <button class="icon" value="cancel" type="submit">×</button>
         </div>
         <p class="muted">支持 CSV 和 XLSX。第一行从第 4 列开始为产品型号，前三列依次为 group、parameter、unit；也支持长表字段 code、series、group、parameter、unit、value。</p>
@@ -251,17 +249,31 @@
           <button class="icon" id="closeProfileBtn" type="button">×</button>
         </div>
         <form id="profileForm" class="settings-form">
+          <section class="profile-avatar-panel">
+            <div class="profile-avatar-preview">
+              <img id="profileAvatarImage" class="hidden" alt="" />
+              <span id="profileAvatarInitial"></span>
+            </div>
+            <label class="avatar-upload-control">
+              <span>用户头像</span>
+              <input id="avatarUploadInput" name="avatar" type="file" accept=".png,.jpg,.jpeg,.webp" />
+            </label>
+          </section>
+          <label class="profile-field-muted">
+            <span>用户ID</span>
+            <input name="user_id" disabled />
+          </label>
+          <label class="profile-field-muted">
+            <span>用户组</span>
+            <input name="group_name" disabled />
+          </label>
           <label>
             <span>用户名</span>
-            <input name="username" disabled />
+            <input name="username" required maxlength="64" />
           </label>
-          <label>
-            <span>显示名</span>
-            <input name="display_name" required />
-          </label>
-          <label>
-            <span>角色</span>
-            <input name="role" disabled />
+          <label class="profile-field-muted">
+            <span>邮箱</span>
+            <input name="email" disabled />
           </label>
           <label>
             <span>新密码</span>
@@ -282,7 +294,7 @@
           <p class="eyebrow">PSL Selection</p>
           <h1>管理后台</h1>
         </div>
-        <button id="backToMainBtn" class="ghost" type="button">← 返回选型清单</button>
+        <button id="backToMainBtn" class="ghost" type="button">← 返回</button>
       </header>
       <div class="admin-layout">
         <aside class="admin-sidebar" id="adminSidebar" aria-label="后台一级导航">
@@ -321,13 +333,8 @@
               </div>
               <form id="adminUserForm" class="user-form hidden">
                 <input name="id" type="hidden" />
-                <input name="username" placeholder="账号" required />
-                <input name="display_name" placeholder="显示名" required />
-                <select name="role">
-                  <option value="viewer">查看者</option>
-                  <option value="editor">编辑员</option>
-                  <option value="admin">管理员</option>
-                </select>
+                <input name="username" placeholder="用户名" required />
+                <input name="email" placeholder="邮箱" type="email" required />
                 <input name="password" placeholder="新密码" type="password" />
                 <button class="primary" id="adminSaveUserBtn" type="button">保存用户</button>
               </form>
