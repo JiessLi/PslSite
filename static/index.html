@@ -127,14 +127,12 @@
           <div class="commands">
             <a class="secondary role-admin" href="/api/template.csv">下载模板</a>
             <button id="uploadBtn" class="secondary role-edit" type="button">上传模板</button>
-            <button id="templateBtn" class="secondary role-edit" type="button">表格模板</button>
             <button id="addProductBtn" class="primary role-edit" type="button">产品管理</button>
           </div>
         </section>
 
         <section class="status-row">
           <div id="summary"></div>
-          <div id="message" class="message"></div>
         </section>
 
         <section class="table-shell">
@@ -142,6 +140,8 @@
         </section>
       </section>
     </main>
+
+    <div id="message" class="message"></div>
 
     <dialog id="productManageDialog">
       <div class="dialog-body">
@@ -301,6 +301,7 @@
           <button class="admin-sidebar-toggle" id="adminSidebarToggle" type="button" title="收起侧栏">⇤</button>
           <nav class="admin-tabs">
             <button class="admin-tab active" data-tab="users" type="button"><span class="admin-tab-icon">👥</span><span class="admin-tab-label">用户管理</span></button>
+            <button class="admin-tab" data-tab="templates" type="button"><span class="admin-tab-icon">📐</span><span class="admin-tab-label">模板管理</span></button>
             <button class="admin-tab" data-tab="settings" type="button"><span class="admin-tab-icon">⚙️</span><span class="admin-tab-label">系统设置</span></button>
             <button class="admin-tab" data-tab="audit" type="button"><span class="admin-tab-icon">📋</span><span class="admin-tab-label">修改记录</span></button>
           </nav>
@@ -339,6 +340,19 @@
                 <button class="primary" id="adminSaveUserBtn" type="button">保存用户</button>
               </form>
               <div id="adminUsersList" class="users-list"></div>
+            </div>
+          </section>
+
+          <section class="admin-content hidden" id="adminTemplatesPanel">
+            <nav class="admin-sub-tabs" aria-label="模板管理二级标签">
+              <button class="admin-sub-tab active" data-sub-tab="params" type="button">参数配置</button>
+            </nav>
+            <div class="admin-sub-panel" id="adminSubParamsPanel">
+              <div class="admin-panel-tools">
+                <div class="panel-subhead">参数模板列表</div>
+                <button id="adminTemplateAddParamBtn" class="secondary" type="button">新增参数</button>
+              </div>
+              <div id="adminTemplateList" class="template-list"></div>
             </div>
           </section>
 
@@ -391,7 +405,7 @@
                   <label><span>发件人地址</span><input name="smtp_sender" placeholder="留空则与邮箱账号一致" /></label>
                 </fieldset>
                 <div class="dialog-actions">
-                  <button class="primary" type="submit">保存邮箱配置</button>
+                  <button class="primary" type="submit">保存配置</button>
                 </div>
               </form>
             </div>

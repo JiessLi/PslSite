@@ -444,7 +444,8 @@ async function saveParameter() {
   }
   $("#paramDialog").close();
   await loadCatalog();
-  if ($("#templateDialog").open) renderTemplateList();
+  if ($("#templateDialog").open) renderTemplateList("#templateList");
+  renderTemplateList("#adminTemplateList");
   showMessage("参数已保存");
 }
 
@@ -702,9 +703,11 @@ async function submitUpload() {
   showMessage(`导入完成：${result.summary.values || 0} 个参数值`);
 }
 
-function renderTemplateList() {
+function renderTemplateList(target = "#templateList") {
   const groups = groupRows();
-  $("#templateList").innerHTML = groups.map((group) => `
+  const el = $(target);
+  if (!el) return;
+  el.innerHTML = groups.map((group) => `
     <section class="template-group" data-group-id="${group.id}">
       <h3 draggable="true">
         <span class="template-group-drag-handle">⠿</span>
@@ -805,6 +808,9 @@ function loadAdminSection(tabName) {
     loadAdminSettings();
   } else if (tabName === "audit") {
     loadAdminAudit();
+  } else if (tabName === "templates") {
+    loadAdminSubTab($("#adminTemplatesPanel"), "params");
+    renderTemplateList("#adminTemplateList");
   }
 }
 
@@ -1420,8 +1426,8 @@ function bindEvents() {
 
   $("#addProductBtn").addEventListener("click", () => openProductManage());
   $("#uploadBtn").addEventListener("click", () => $("#uploadDialog").showModal());
-  $("#templateBtn").addEventListener("click", () => openTemplateDialog());
   $("#templateAddParamBtn").addEventListener("click", () => openParameterDialog());
+  $("#adminTemplateAddParamBtn").addEventListener("click", () => openParameterDialog());
   $("#closeProductBtn").addEventListener("click", () => $("#productDialog").close());
   $("#cancelProductBtn").addEventListener("click", () => $("#productDialog").close());
   $("#closeParamBtn").addEventListener("click", () => $("#paramDialog").close());
@@ -1446,134 +1452,141 @@ function bindEvents() {
   });
   $("#saveParamBtn").addEventListener("click", () => saveParameter().catch((error) => showMessage(error.message, "error")));
   $("#submitUploadBtn").addEventListener("click", () => submitUpload().catch((error) => showMessage(error.message, "error")));
-  $("#templateList").addEventListener("click", async (event) => {
-    const edit = event.target.closest("[data-edit-param]");
-    const remove = event.target.closest("[data-delete-param]");
-    if (edit) {
-      const parameter = state.catalog.parameters.find((item) => item.id === Number(edit.dataset.editParam));
-      openParameterDialog(parameter);
-    }
-    if (remove && window.confirm("确认删除该参数模板？对应参数值也会删除。")) {
-      await api(`/api/parameters/${remove.dataset.deleteParam}`, { method: "DELETE" });
-      await loadCatalog();
-      if ($("#templateDialog").open) renderTemplateList();
-      showMessage("参数模板已删除");
-    }
-  });
-
-  // --- template drag-sort (groups + parameters) ---
+  // --- template list: click, drag-sort (bound to both dialog + admin panel) ---
   let templateDragSource = null;
   let templateDragType = null; // 'group' | 'param'
 
-  $("#templateList").addEventListener("dragstart", (event) => {
-    // Check group header: drag from h3 inside .template-group
-    const h3 = event.target.closest("h3");
-    if (h3 && h3.closest(".template-group")) {
-      const groupEl = h3.closest(".template-group");
-      templateDragSource = groupEl;
-      templateDragType = "group";
-      groupEl.classList.add("dragging");
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", groupEl.dataset.groupId);
-      return;
-    }
-    // Check parameter row: drag from .template-item (but not buttons)
-    const paramEl = event.target.closest(".template-item");
-    if (paramEl && !event.target.closest("button")) {
-      templateDragSource = paramEl;
-      templateDragType = "param";
-      paramEl.classList.add("dragging");
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", paramEl.dataset.paramId);
-      return;
-    }
-    event.preventDefault();
-  });
+  function bindTemplateEvents(selector) {
+    const container = $(selector);
+    if (!container) return;
 
-  $("#templateList").addEventListener("dragend", () => {
-    if (templateDragSource) templateDragSource.classList.remove("dragging");
-    templateDragSource = null;
-    templateDragType = null;
-    $$("#templateList .drag-over").forEach((el) => el.classList.remove("drag-over"));
-  });
+    container.addEventListener("click", async (event) => {
+      const edit = event.target.closest("[data-edit-param]");
+      const remove = event.target.closest("[data-delete-param]");
+      if (edit) {
+        const parameter = state.catalog.parameters.find((item) => item.id === Number(edit.dataset.editParam));
+        openParameterDialog(parameter);
+      }
+      if (remove && window.confirm("确认删除该参数模板？对应参数值也会删除。")) {
+        await api(`/api/parameters/${remove.dataset.deleteParam}`, { method: "DELETE" });
+        await loadCatalog();
+        if ($("#templateDialog").open) renderTemplateList("#templateList");
+        renderTemplateList("#adminTemplateList");
+        showMessage("参数模板已删除");
+      }
+    });
 
-  $("#templateList").addEventListener("dragover", (event) => {
-    event.preventDefault();
-    if (!templateDragType) return;
-    event.dataTransfer.dropEffect = "move";
-    // Clear all highlights, then set on current target
-    $$("#templateList .drag-over").forEach((el) => el.classList.remove("drag-over"));
-    if (templateDragType === "group") {
-      const groupEl = event.target.closest(".template-group");
-      if (groupEl && groupEl !== templateDragSource) groupEl.classList.add("drag-over");
-    } else if (templateDragType === "param") {
+    container.addEventListener("dragstart", (event) => {
+      const h3 = event.target.closest("h3");
+      if (h3 && h3.closest(".template-group")) {
+        const groupEl = h3.closest(".template-group");
+        templateDragSource = groupEl;
+        templateDragType = "group";
+        groupEl.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", groupEl.dataset.groupId);
+        return;
+      }
       const paramEl = event.target.closest(".template-item");
-      if (paramEl && paramEl !== templateDragSource && paramEl.dataset.groupId === templateDragSource.dataset.groupId) {
-        paramEl.classList.add("drag-over");
+      if (paramEl && !event.target.closest("button")) {
+        templateDragSource = paramEl;
+        templateDragType = "param";
+        paramEl.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", paramEl.dataset.paramId);
+        return;
       }
-    }
-  });
+      event.preventDefault();
+    });
 
-  $("#templateList").addEventListener("drop", async (event) => {
-    event.preventDefault();
-    if (!templateDragSource || !templateDragType) return;
+    container.addEventListener("dragend", () => {
+      if (templateDragSource) templateDragSource.classList.remove("dragging");
+      templateDragSource = null;
+      templateDragType = null;
+      container.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+    });
 
-    if (templateDragType === "group") {
-      const target = event.target.closest(".template-group");
-      if (!target || target === templateDragSource) return;
-      const allGroups = $$("#templateList .template-group");
-      const groupId = Number(templateDragSource.dataset.groupId);
-      const targetGroupId = Number(target.dataset.groupId);
-      const targetGroup = state.catalog.groups.find((g) => g.id === targetGroupId);
-      const newSort = targetGroup ? targetGroup.sort_order : 10;
-      try {
-        await api(`/api/groups/${groupId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
-        const ordered = allGroups.map((el) => Number(el.dataset.groupId));
-        const movedIndex = ordered.indexOf(groupId);
-        const newIndex = ordered.indexOf(targetGroupId);
-        if (movedIndex >= 0) ordered.splice(movedIndex, 1);
-        ordered.splice(newIndex, 0, groupId);
-        await Promise.all(ordered.map((id, i) =>
-          api(`/api/groups/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
-        ));
-        await loadCatalog();
-        renderTemplateList();
-        showMessage("分组排序已保存");
-      } catch (error) {
-        showMessage(error.message, "error");
+    container.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      if (!templateDragType) return;
+      event.dataTransfer.dropEffect = "move";
+      container.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+      if (templateDragType === "group") {
+        const groupEl = event.target.closest(".template-group");
+        if (groupEl && groupEl !== templateDragSource) groupEl.classList.add("drag-over");
+      } else if (templateDragType === "param") {
+        const paramEl = event.target.closest(".template-item");
+        if (paramEl && paramEl !== templateDragSource && paramEl.dataset.groupId === templateDragSource.dataset.groupId) {
+          paramEl.classList.add("drag-over");
+        }
       }
-      return;
-    }
+    });
 
-    if (templateDragType === "param") {
-      const target = event.target.closest(".template-item");
-      if (!target || target === templateDragSource) return;
-      // Only allow drag within the same group
-      if (target.dataset.groupId !== templateDragSource.dataset.groupId) return;
-      const group = target.closest(".template-group");
-      const siblings = Array.from(group.querySelectorAll(".template-item"));
-      const paramId = Number(templateDragSource.dataset.paramId);
-      const newIndex = siblings.indexOf(target);
-      const targetParam = state.catalog.parameters.find((p) => p.id === Number(target.dataset.paramId));
-      const newSort = targetParam ? targetParam.sort_order : (newIndex + 1) * 10;
-      try {
-        await api(`/api/parameters/${paramId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
-        const ordered = siblings.map((el) => Number(el.dataset.paramId));
-        const movedIndex = ordered.indexOf(paramId);
-        if (movedIndex >= 0) ordered.splice(movedIndex, 1);
-        ordered.splice(newIndex, 0, paramId);
-        await Promise.all(ordered.map((id, i) =>
-          api(`/api/parameters/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
-        ));
-        await loadCatalog();
-        renderTemplateList();
-        showMessage("参数排序已保存");
-      } catch (error) {
-        showMessage(error.message, "error");
+    container.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      if (!templateDragSource || !templateDragType) return;
+
+      if (templateDragType === "group") {
+        const target = event.target.closest(".template-group");
+        if (!target || target === templateDragSource) return;
+        const allGroups = container.querySelectorAll(".template-group");
+        const groupId = Number(templateDragSource.dataset.groupId);
+        const targetGroupId = Number(target.dataset.groupId);
+        const targetGroup = state.catalog.groups.find((g) => g.id === targetGroupId);
+        const newSort = targetGroup ? targetGroup.sort_order : 10;
+        try {
+          await api(`/api/groups/${groupId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
+          const ordered = Array.from(allGroups).map((el) => Number(el.dataset.groupId));
+          const movedIndex = ordered.indexOf(groupId);
+          const newIndex = ordered.indexOf(targetGroupId);
+          if (movedIndex >= 0) ordered.splice(movedIndex, 1);
+          ordered.splice(newIndex, 0, groupId);
+          await Promise.all(ordered.map((id, i) =>
+            api(`/api/groups/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
+          ));
+          await loadCatalog();
+          renderTemplateList("#templateList");
+          renderTemplateList("#adminTemplateList");
+          showMessage("分组排序已保存");
+        } catch (error) {
+          showMessage(error.message, "error");
+        }
+        return;
       }
-    }
-  });
-  // --- end template drag-sort ---
+
+      if (templateDragType === "param") {
+        const target = event.target.closest(".template-item");
+        if (!target || target === templateDragSource) return;
+        if (target.dataset.groupId !== templateDragSource.dataset.groupId) return;
+        const group = target.closest(".template-group");
+        const siblings = Array.from(group.querySelectorAll(".template-item"));
+        const paramId = Number(templateDragSource.dataset.paramId);
+        const newIndex = siblings.indexOf(target);
+        const targetParam = state.catalog.parameters.find((p) => p.id === Number(target.dataset.paramId));
+        const newSort = targetParam ? targetParam.sort_order : (newIndex + 1) * 10;
+        try {
+          await api(`/api/parameters/${paramId}`, { method: "PUT", body: JSON.stringify({ sort_order: newSort }) });
+          const ordered = siblings.map((el) => Number(el.dataset.paramId));
+          const movedIndex = ordered.indexOf(paramId);
+          if (movedIndex >= 0) ordered.splice(movedIndex, 1);
+          ordered.splice(newIndex, 0, paramId);
+          await Promise.all(ordered.map((id, i) =>
+            api(`/api/parameters/${id}`, { method: "PUT", body: JSON.stringify({ sort_order: (i + 1) * 10 }) })
+          ));
+          await loadCatalog();
+          renderTemplateList("#templateList");
+          renderTemplateList("#adminTemplateList");
+          showMessage("参数排序已保存");
+        } catch (error) {
+          showMessage(error.message, "error");
+        }
+      }
+    });
+  }
+
+  bindTemplateEvents("#templateList");
+  bindTemplateEvents("#adminTemplateList");
+  // --- end template events ---
 
   $("#selectionTable").addEventListener("mousedown", (event) => {
     const cell = event.target.closest(".value-cell.editable");

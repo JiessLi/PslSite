@@ -736,12 +736,30 @@ body.editing-mode .maintenance-toolbar {
   font-size: 13px;
 }
 
-.message[data-type="error"] {
-  color: var(--danger);
+.message {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 6px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,.08);
+  backdrop-filter: blur(10px);
 }
 
-.message[data-type="ok"] {
+.message[data-type="error"] {
+  color: var(--danger);
+  background: rgba(255, 240, 240, .92);
+}
+
+.message[data-type="ok"],
+.message[data-type="success"] {
   color: var(--brand);
+  background: rgba(240, 255, 250, .92);
 }
 
 .table-shell {
