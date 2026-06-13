@@ -90,16 +90,7 @@ function groupRows() {
 }
 
 function renderFilters() {
-  const series = $("#seriesFilter");
-  const tag = $("#tagFilter");
-  const param = $("#paramFilter");
-  series.innerHTML = `<option value="">全部系列</option>${state.catalog.filters.series.map((item) => `<option>${escapeHtml(item)}</option>`).join("")}`;
-  tag.innerHTML = `<option value="">全部标签</option>${state.catalog.filters.tags.map((item) => `<option>${escapeHtml(item)}</option>`).join("")}`;
-  const filterable = state.catalog.parameters.filter((item) => item.filterable);
-  param.innerHTML = `<option value="">不按参数范围</option>${filterable.map((item) => `<option value="${item.id}">${escapeHtml(item.group_name)} / ${escapeHtml(item.name)}${item.unit ? ` (${escapeHtml(item.unit)})` : ""}</option>`).join("")}`;
-  series.value = state.filters.series;
-  tag.value = state.filters.tag;
-  param.value = state.filters.parameterId;
+  // 筛选渲染：待重构
 }
 
 function productImage(product) {
@@ -137,50 +128,7 @@ function groupProductsByFirstRow(products) {
 }
 
 function renderTable() {
-  if (!state.catalog) return;
-  const productGroups = groupProductsByFirstRow(filteredProducts());
-  const products = productGroups.flatMap((group) => group.products);
-  const signedIn = Boolean(state.user);
-  const canEdit = signedIn && state.editMode;
-  $("#summary").textContent = `当前显示 ${products.length} / ${state.catalog.products.length} 个型号，${state.catalog.parameters.length} 个参数项`;
-  const drawerMeta = $("#drawerMeta");
-  if (drawerMeta) {
-    const activeFilters = [
-      state.filters.q,
-      state.filters.series,
-      state.filters.tag,
-      state.filters.parameterId,
-      state.filters.min,
-      state.filters.max,
-    ].filter(Boolean).length;
-    drawerMeta.textContent = activeFilters
-      ? `${activeFilters} 个筛选条件 · 当前 ${products.length} 个型号`
-      : `未启用筛选 · 当前 ${products.length} 个型号`;
-  }
-  document.body.classList.toggle("editing-mode", canEdit);
-  const colCount = Math.max(products.length, 1);
-  let html = "";
-  html += `<tbody>`;
-  if (!products.length) {
-    html += `<tr><td class="empty-row" colspan="${colCount + 3}">没有符合条件的产品</td></tr>`;
-  }
-  let valueRowIndex = 0;
-  groupRows().forEach((group) => {
-    group.parameters.forEach((param, index) => {
-      html += `<tr>`;
-      if (index === 0) html += `<th class="sticky-left group-col group-name" rowspan="${group.parameters.length}">${escapeHtml(group.name)}</th>`;
-      html += `<th class="sticky-left param-col param-name">${escapeHtml(param.name)}</th>`;
-      html += `<td class="sticky-left unit-col unit">${escapeHtml(param.unit || "-")}</td>`;
-      products.forEach((product, productIndex) => {
-        const value = productValue(product.id, param.id);
-        html += `<td class="value-cell ${canEdit ? "editable" : ""}" data-row="${valueRowIndex}" data-col="${productIndex}" data-product-id="${product.id}" data-parameter-id="${param.id}" title="${escapeHtml(value)}">${escapeHtml(value || "-")}</td>`;
-      });
-      html += `</tr>`;
-      valueRowIndex += 1;
-    });
-  });
-  html += `</tbody>`;
-  $("#selectionTable").innerHTML = html;
+  // 表格渲染：待重构
 }
 
 async function loadCatalog() {
@@ -338,6 +286,66 @@ function chooseAvatarFile() {
   });
 }
 
+function openProductDialog(product = null) {
+  const form = $("#productForm");
+  form.reset();
+  $("#productDialogTitle").textContent = product ? "编辑产品" : "新增产品";
+  form.id.value = product?.id || "";
+  form.code.value = product?.code || "";
+  form.code.disabled = Boolean(product);
+  form.name.value = product?.name || "";
+  form.series.value = product?.series || "";
+  form.tag.value = product?.tag || "";
+  form.manufacturer.value = product?.manufacturer || "";
+  form.sort_order.value = product?.sort_order || "";
+  form.image_url.value = product?.image_url || "";
+  $("#productDialog").showModal();
+}
+
+function openProductManage() {
+  $("#productManageForm").reset();
+  $("#productManageForm").id.value = "";
+  $("#productManageForm").code.disabled = false;
+  renderProductManageList();
+  $("#productManageDialog").showModal();
+}
+
+function renderProductManageList() {
+  if (!state.catalog) return;
+  $("#productManageList").innerHTML = state.catalog.products.map((product) => `
+    <article class="user-item">
+      <div>
+        <strong>${escapeHtml(product.name)}</strong>
+        <span>${escapeHtml(product.code)} · ${escapeHtml(product.series || "-")}</span>
+      </div>
+      <div class="user-actions">
+        <button type="button" data-edit-product="${product.id}">编辑</button>
+        <button type="button" data-delete-product="${product.id}">删除</button>
+      </div>
+    </article>
+  `).join("") || `<p class="muted">暂无产品</p>`;
+}
+
+async function saveManageProduct() {
+  const form = $("#productManageForm");
+  const data = Object.fromEntries(new FormData(form).entries());
+  if (!data.code.trim()) {
+    showMessage("产品型号不能为空", "error");
+    return;
+  }
+  if (data.id) {
+    await api(`/api/products/${data.id}`, { method: "PUT", body: JSON.stringify(data) });
+  } else {
+    await api("/api/products", { method: "POST", body: JSON.stringify(data) });
+  }
+  form.reset();
+  form.id.value = "";
+  form.code.disabled = false;
+  await loadCatalog();
+  renderProductManageList();
+  showMessage("产品已保存");
+}
+
 function openParameterDialog(parameter = null) {
   const form = $("#paramForm");
   form.reset();
@@ -350,6 +358,21 @@ function openParameterDialog(parameter = null) {
   form.sort_order.value = parameter?.sort_order || "";
   form.filterable.checked = Boolean(parameter?.filterable);
   $("#paramDialog").showModal();
+}
+
+async function saveProduct() {
+  const form = $("#productForm");
+  const data = Object.fromEntries(new FormData(form).entries());
+  data.sort_order = Number(data.sort_order || 0);
+  if (form.id.value) {
+    await api(`/api/products/${form.id.value}`, { method: "PUT", body: JSON.stringify(data) });
+  } else {
+    await api("/api/products", { method: "POST", body: JSON.stringify(data) });
+  }
+  $("#productDialog").close();
+  await loadCatalog();
+  if ($("#productManageDialog").open) renderProductManageList();
+  showMessage("产品已保存");
 }
 
 async function saveParameter() {
@@ -627,8 +650,7 @@ function renderTemplateList(target = "#templateList") {
   const groups = groupRows();
   const el = $(target);
   if (!el) return;
-  el.innerHTML =
-    groups.map((group) => `
+  el.innerHTML = groups.map((group) => `
     <section class="template-group" data-group-id="${group.id}">
       <h3 draggable="true">
         <span class="template-group-drag-handle">⠿</span>
@@ -1345,12 +1367,35 @@ function bindEvents() {
     }
   });
 
-  $("#uploadBtn").addEventListener("click", () => $("#uploadDialog").showModal());
+  const addProductBtn = $("#addProductBtn");
+  if (addProductBtn) addProductBtn.addEventListener("click", () => openProductManage());
+  const uploadBtn = $("#uploadBtn");
+  if (uploadBtn) uploadBtn.addEventListener("click", () => $("#uploadDialog").showModal());
   $("#templateAddParamBtn").addEventListener("click", () => openParameterDialog());
-  $("#adminTemplateAddParamBtn").addEventListener("click", () => openParameterDialog());
+  const adminParamBtn = $("#adminTemplateAddParamBtn");
+  if (adminParamBtn) adminParamBtn.addEventListener("click", () => openParameterDialog());
+  $("#closeProductBtn").addEventListener("click", () => $("#productDialog").close());
+  $("#cancelProductBtn").addEventListener("click", () => $("#productDialog").close());
   $("#closeParamBtn").addEventListener("click", () => $("#paramDialog").close());
   $("#cancelParamBtn").addEventListener("click", () => $("#paramDialog").close());
   $("#closeTemplateBtn").addEventListener("click", () => $("#templateDialog").close());
+  $("#saveProductBtn").addEventListener("click", () => saveProduct().catch((error) => showMessage(error.message, "error")));
+  $("#closeProductManageBtn").addEventListener("click", () => $("#productManageDialog").close());
+  $("#saveManageProductBtn").addEventListener("click", () => saveManageProduct().catch((error) => showMessage(error.message, "error")));
+  $("#productManageList").addEventListener("click", async (event) => {
+    const edit = event.target.closest("[data-edit-product]");
+    const remove = event.target.closest("[data-delete-product]");
+    if (edit) {
+      const product = state.catalog.products.find((item) => item.id === Number(edit.dataset.editProduct));
+      if (product) openProductDialog(product);
+    }
+    if (remove && window.confirm(`确认删除产品 ${remove.closest(".user-item").querySelector("strong").textContent}？相关参数值也会一并删除。`)) {
+      await api(`/api/products/${remove.dataset.deleteProduct}`, { method: "DELETE" });
+      await loadCatalog();
+      renderProductManageList();
+      showMessage("产品已删除");
+    }
+  });
   $("#saveParamBtn").addEventListener("click", () => saveParameter().catch((error) => showMessage(error.message, "error")));
   $("#submitUploadBtn").addEventListener("click", () => submitUpload().catch((error) => showMessage(error.message, "error")));
   // --- template list: click, drag-sort (bound to both dialog + admin panel) ---
@@ -1362,14 +1407,14 @@ function bindEvents() {
     if (!container) return;
 
     container.addEventListener("click", async (event) => {
-      const editParam = event.target.closest("[data-edit-param]");
-      const removeParam = event.target.closest("[data-delete-param]");
-      if (editParam) {
-        const parameter = state.catalog.parameters.find((item) => item.id === Number(editParam.dataset.editParam));
+      const edit = event.target.closest("[data-edit-param]");
+      const remove = event.target.closest("[data-delete-param]");
+      if (edit) {
+        const parameter = state.catalog.parameters.find((item) => item.id === Number(edit.dataset.editParam));
         openParameterDialog(parameter);
       }
-      if (removeParam && window.confirm("确认删除该参数模板？对应参数值也会删除。")) {
-        await api(`/api/parameters/${removeParam.dataset.deleteParam}`, { method: "DELETE" });
+      if (remove && window.confirm("确认删除该参数模板？对应参数值也会删除。")) {
+        await api(`/api/parameters/${remove.dataset.deleteParam}`, { method: "DELETE" });
         await loadCatalog();
         if ($("#templateDialog").open) renderTemplateList("#templateList");
         renderTemplateList("#adminTemplateList");
@@ -1489,98 +1534,9 @@ function bindEvents() {
   bindTemplateEvents("#adminTemplateList");
   // --- end template events ---
 
-  $("#selectionTable").addEventListener("mousedown", (event) => {
-    const cell = event.target.closest(".value-cell.editable");
-    if (!cell || event.button !== 0) return;
-    if (event.target.closest(".cell-editor")) return;
-    event.preventDefault();
-    if (event.shiftKey && state.selection.anchor) {
-      const anchorCell = $(`.value-cell.editable[data-row="${state.selection.anchor.row}"][data-col="${state.selection.anchor.col}"]`);
-      setSelection(anchorCell || cell, cell);
-    } else {
-      setSelection(cell);
-    }
-    isSelecting = true;
-  });
-  $("#selectionTable").addEventListener("mouseover", (event) => {
-    if (!isSelecting) return;
-    const cell = event.target.closest(".value-cell.editable");
-    if (cell) {
-      const anchorCell = $(`.value-cell.editable[data-row="${state.selection.anchor.row}"][data-col="${state.selection.anchor.col}"]`);
-      setSelection(anchorCell || cell, cell);
-    }
-  });
-  document.addEventListener("mouseup", () => {
-    isSelecting = false;
-  });
-  document.addEventListener("keydown", (event) => {
-    const editingInput = event.target.closest && event.target.closest("input, textarea, select");
-    // Delete / Backspace — batch clear selected cells
-    if ((event.key === "Delete" || event.key === "Backspace") && !editingInput) {
-      if (!state.selection.anchor) return;
-      event.preventDefault();
-      deleteSelection();
-    }
-  });
-
-  // Copy — handled via native copy event (not keydown) so event.clipboardData works
-  document.addEventListener("copy", (event) => {
-    if (event.target.closest && event.target.closest("input, textarea, select")) return;
-    if (!state.selection.anchor) return;
-    const text = selectionToClipboardTable();
-    if (!text) return;
-    event.clipboardData.setData("text/plain", text);
-    event.preventDefault();
-    showMessage("已复制选取的单元格");
-  });
-
-  // Cut — copy to clipboard then delete
-  document.addEventListener("cut", (event) => {
-    if (event.target.closest && event.target.closest("input, textarea, select")) return;
-    if (!state.selection.anchor) return;
-    if (!roleCanEdit()) return;
-    const text = selectionToClipboardTable();
-    if (!text) return;
-    event.clipboardData.setData("text/plain", text);
-    event.preventDefault();
-    deleteSelection();
-  });
-
-  // Paste — handled via native paste event so event.clipboardData works
-  document.addEventListener("paste", (event) => {
-    if (event.target.closest && event.target.closest("input, textarea, select")) return;
-    if (!roleCanEdit()) return;
-    const text = event.clipboardData?.getData("text/plain") || "";
-    if (!text || !state.selection.anchor) return;
-    event.preventDefault();
-    pasteIntoSelection(text);
-  });
-  $("#selectionTable").addEventListener("dblclick", (event) => {
-    const cell = event.target.closest(".value-cell");
-    if (cell) editValueInline(cell).catch((error) => showMessage(error.message, "error"));
-  });
-  [
-    ["searchInput", "q"],
-    ["seriesFilter", "series"],
-    ["tagFilter", "tag"],
-    ["paramFilter", "parameterId"],
-    ["minFilter", "min"],
-    ["maxFilter", "max"],
-  ].forEach(([id, key]) => {
-    $(`#${id}`).addEventListener("input", (event) => {
-      state.filters[key] = event.target.value;
-      renderTable();
-    });
-  });
+  // --- 表格交互 & 选择区：待重构 ---
 
   // --- Image lightbox ---
-  $("#selectionTable").addEventListener("click", (event) => {
-    const img = event.target.closest(".product-visual img");
-    if (img) {
-      event.preventDefault();
-      openLightbox(img);
-    }
-  });
   $("#lightboxClose").addEventListener("click", closeLightbox);
   $("#lightboxOverlay").addEventListener("click", (event) => {
     if (event.target === $("#lightboxOverlay")) closeLightbox();

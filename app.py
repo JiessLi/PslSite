@@ -1214,6 +1214,20 @@ class AppHandler(BaseHTTPRequestHandler):
                     log_audit(conn, user["id"], "save_product", f"product:{product_id}", data)
                 self.send_json({"id": product_id})
                 return
+            if path == "/api/groups":
+                user = self.require_user()
+                if not user:
+                    return
+                data = self.read_json()
+                name = (data.get("name") or "").strip()
+                if not name:
+                    self.send_error_json("分组名称不能为空")
+                    return
+                with connect() as conn:
+                    group_id = ensure_group(conn, name)
+                    log_audit(conn, user["id"], "create_group", f"group:{group_id}", {"name": name})
+                self.send_json({"id": group_id})
+                return
             if path == "/api/parameters":
                 user = self.require_user()
                 if not user:
@@ -1431,9 +1445,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     if not existing:
                         self.send_error_json("分组不存在", HTTPStatus.NOT_FOUND)
                         return
+                    name = (data.get("name") or existing["name"]).strip()
+                    if not name:
+                        self.send_error_json("分组名称不能为空")
+                        return
                     conn.execute(
-                        "UPDATE parameter_groups SET sort_order = ? WHERE id = ?",
-                        (int(data.get("sort_order", existing["sort_order"] or 0) or 0), group_id),
+                        "UPDATE parameter_groups SET name = ?, sort_order = ? WHERE id = ?",
+                        (name, int(data.get("sort_order", existing["sort_order"] or 0) or 0), group_id),
                     )
                     log_audit(conn, user["id"], "update_group", f"group:{group_id}", data)
                     self.send_json({"ok": True})
@@ -1566,6 +1584,16 @@ class AppHandler(BaseHTTPRequestHandler):
                     parameter_id = int(path.rsplit("/", 1)[1])
                     conn.execute("DELETE FROM parameters WHERE id = ?", (parameter_id,))
                     log_audit(conn, user["id"], "delete_parameter", f"parameter:{parameter_id}", {})
+                    self.send_json({"ok": True})
+                    return
+                if path.startswith("/api/groups/"):
+                    group_id = int(path.rsplit("/", 1)[1])
+                    existing = conn.execute("SELECT id, name FROM parameter_groups WHERE id = ?", (group_id,)).fetchone()
+                    if not existing:
+                        self.send_error_json("分组不存在", HTTPStatus.NOT_FOUND)
+                        return
+                    conn.execute("DELETE FROM parameter_groups WHERE id = ?", (group_id,))
+                    log_audit(conn, user["id"], "delete_group", f"group:{group_id}", {"name": existing["name"]})
                     self.send_json({"ok": True})
                     return
                 if path.startswith("/api/user-groups/"):

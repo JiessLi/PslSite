@@ -94,53 +94,64 @@
             <span class="drawer-meta" id="drawerMeta">点击展开筛选条件</span>
           </summary>
           <section class="toolbar">
-            <div class="filters">
-            <label>
-              <span>搜索</span>
-              <input id="searchInput" placeholder="型号、名称、参数值" />
-            </label>
-            <label>
-              <span>系列</span>
-              <select id="seriesFilter"></select>
-            </label>
-            <label>
-              <span>标签</span>
-              <select id="tagFilter"></select>
-            </label>
-            <label>
-              <span>关键参数</span>
-              <select id="paramFilter"></select>
-            </label>
-            <label>
-              <span>最小值</span>
-              <input id="minFilter" inputmode="decimal" placeholder="不限" />
-            </label>
-            <label>
-              <span>最大值</span>
-              <input id="maxFilter" inputmode="decimal" placeholder="不限" />
-            </label>
-            </div>
+            <!-- 筛选工具栏：待重构 -->
           </section>
         </details>
 
         <section class="maintenance-toolbar" aria-label="数据维护工具栏">
-          <div class="commands">
-            <a class="secondary role-admin" href="/api/template.csv">下载模板</a>
-            <button id="uploadBtn" class="secondary role-edit" type="button">上传模板</button>
-          </div>
+          <!-- 编辑工具栏：待重构 -->
         </section>
 
         <section class="status-row">
           <div id="summary"></div>
         </section>
 
-        <section class="table-shell">
-          <table id="selectionTable" class="selection-table"></table>
+        <section class="table-shell" id="tableShell">
+          <!-- 产品选型表格：待重构 -->
         </section>
       </section>
     </main>
 
     <div id="message" class="message"></div>
+
+    <dialog id="productManageDialog">
+      <div class="dialog-body">
+        <div class="dialog-head">
+          <h2>产品管理</h2>
+          <button class="icon" id="closeProductManageBtn" type="button">×</button>
+        </div>
+        <form id="productManageForm" class="user-form">
+          <input name="id" type="hidden" />
+          <input name="code" placeholder="产品型号（必填）" required />
+          <input name="name" placeholder="产品名称" />
+          <button class="primary" id="saveManageProductBtn" type="button">新增产品</button>
+        </form>
+        <div id="productManageList" class="users-list"></div>
+      </div>
+    </dialog>
+
+    <dialog id="productDialog">
+      <form id="productForm" method="dialog" class="dialog-body">
+        <div class="dialog-head">
+          <h2 id="productDialogTitle">产品</h2>
+          <button class="icon" id="closeProductBtn" type="button">×</button>
+        </div>
+        <input name="id" type="hidden" />
+        <div class="form-grid two">
+          <label><span>产品型号</span><input name="code" required /></label>
+          <label><span>产品名称</span><input name="name" required /></label>
+          <label><span>产品系列</span><input name="series" /></label>
+          <label><span>产品标签</span><input name="tag" /></label>
+          <label><span>主体品牌</span><input name="manufacturer" /></label>
+          <label><span>排序</span><input name="sort_order" inputmode="numeric" /></label>
+          <label class="wide"><span>产品图片 URL</span><input name="image_url" placeholder="可填图片链接，留空显示占位" /></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="ghost" id="cancelProductBtn" type="button">取消</button>
+          <button class="primary" id="saveProductBtn" type="button">保存</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="paramDialog">
       <form id="paramForm" method="dialog" class="dialog-body">
@@ -304,16 +315,7 @@
           </section>
 
           <section class="admin-content hidden" id="adminTemplatesPanel">
-            <nav class="admin-sub-tabs" aria-label="模板管理二级标签">
-              <button class="admin-sub-tab active" data-sub-tab="params" type="button">参数配置</button>
-            </nav>
-            <div class="admin-sub-panel" id="adminSubParamsPanel">
-              <div class="admin-panel-tools">
-                <div class="panel-subhead">参数模板列表</div>
-                <button id="adminTemplateAddParamBtn" class="secondary" type="button">新增参数</button>
-              </div>
-              <div id="adminTemplateList" class="template-list"></div>
-            </div>
+            <!-- 模板管理工作区：待重构 -->
           </section>
 
           <section class="admin-content hidden" id="adminSettingsPanel">
