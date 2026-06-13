@@ -371,7 +371,10 @@ SAMPLE_PRODUCTS = [
         "manufacturer": "123Robot",
         "sort_order": 10,
         "values": {
-            ("设备本体", "主体品牌", ""): "123Robot",
+            ("基本信息", "产品类型", ""): "翻箱倒料机器人",
+            ("基本信息", "产品图例", ""): "",
+            ("基本信息", "产品名称", ""): "旋转线 I",
+            ("基本信息", "产品型号", ""): "A-ZF0100",
             ("基本参数", "长度", "mm"): "1434",
             ("基本参数", "宽度", "mm"): "834",
             ("基本参数", "高度", "mm"): "1365",
@@ -391,7 +394,10 @@ SAMPLE_PRODUCTS = [
         "manufacturer": "123Robot",
         "sort_order": 20,
         "values": {
-            ("设备本体", "主体品牌", ""): "123Robot",
+            ("基本信息", "产品类型", ""): "翻箱倒料机器人",
+            ("基本信息", "产品图例", ""): "",
+            ("基本信息", "产品名称", ""): "旋转线 II",
+            ("基本信息", "产品型号", ""): "A-ZF0600",
             ("基本参数", "长度", "mm"): "1660",
             ("基本参数", "宽度", "mm"): "1284",
             ("基本参数", "高度", "mm"): "1706",
@@ -411,7 +417,10 @@ SAMPLE_PRODUCTS = [
         "manufacturer": "123Robot",
         "sort_order": 30,
         "values": {
-            ("设备本体", "主体品牌", ""): "123Robot",
+            ("基本信息", "产品类型", ""): "潜伏机器人",
+            ("基本信息", "产品图例", ""): "",
+            ("基本信息", "产品名称", ""): "精灵线 I",
+            ("基本信息", "产品型号", ""): "A-KD0300",
             ("基本参数", "长度", "mm"): "800",
             ("基本参数", "宽度", "mm"): "550",
             ("基本参数", "高度", "mm"): "300",
@@ -431,7 +440,10 @@ SAMPLE_PRODUCTS = [
         "manufacturer": "123Robot",
         "sort_order": 40,
         "values": {
-            ("设备本体", "主体品牌", ""): "123Robot",
+            ("基本信息", "产品类型", ""): "潜伏机器人",
+            ("基本信息", "产品图例", ""): "",
+            ("基本信息", "产品名称", ""): "精灵线 III",
+            ("基本信息", "产品型号", ""): "A-KD1000",
             ("基本参数", "长度", "mm"): "1150",
             ("基本参数", "宽度", "mm"): "800",
             ("基本参数", "高度", "mm"): "300",
@@ -456,13 +468,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL")
         if "email" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''")
-        # Migration: add used column to email_codes if missing (for older DBs)
-        ec_cols = [r["name"] for r in conn.execute("PRAGMA table_info(email_codes)").fetchall()]
-        if "used" not in ec_cols:
-            conn.execute("ALTER TABLE email_codes ADD COLUMN used INTEGER DEFAULT 0")
-        if "created_at" not in ec_cols:
-            conn.execute("ALTER TABLE email_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
-        # Seed system_settings defaults if empty
+        # Migration: add kind column to parameters if missing
+        p_cols = [r["name"] for r in conn.execute("PRAGMA table_info(parameters)").fetchall()]
+        if "kind" not in p_cols:
+            conn.execute("ALTER TABLE parameters ADD COLUMN kind TEXT DEFAULT 'normal'")
         if conn.execute("SELECT COUNT(*) FROM system_settings").fetchone()[0] == 0:
             for k in (
                 "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_sender",

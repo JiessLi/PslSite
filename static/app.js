@@ -160,12 +160,7 @@ function renderTable() {
   document.body.classList.toggle("editing-mode", canEdit);
   const colCount = Math.max(products.length, 1);
   let html = "";
-  html += `<thead>`;
-  html += `<tr><th class="corner intro-label" colspan="3">产品类型</th>${productGroups.map((group) => `<th class="product-cell product-group-cell" colspan="${group.products.length}" style="--span:${group.products.length}"><div class="product-series">${escapeHtml(group.name)}</div></th>`).join("")}</tr>`;
-  html += `<tr><th class="sticky-left intro-label" colspan="3">产品图例</th>${products.map((product) => `<th class="product-cell"><div class="product-visual">${productImage(product)}</div></th>`).join("")}</tr>`;
-  html += `<tr><th class="sticky-left intro-label" colspan="3">产品名称</th>${products.map((product) => `<th class="product-cell"><button class="linkish" data-edit-product="${product.id}">${escapeHtml(product.name)}</button></th>`).join("")}</tr>`;
-  html += `<tr><th class="sticky-left intro-label" colspan="3">产品型号</th>${products.map((product) => `<th class="product-cell code">${escapeHtml(product.code)}</th>`).join("")}</tr>`;
-  html += `</thead><tbody>`;
+  html += `<tbody>`;
   if (!products.length) {
     html += `<tr><td class="empty-row" colspan="${colCount + 3}">没有符合条件的产品</td></tr>`;
   }
@@ -343,66 +338,6 @@ function chooseAvatarFile() {
   });
 }
 
-function openProductDialog(product = null) {
-  const form = $("#productForm");
-  form.reset();
-  $("#productDialogTitle").textContent = product ? "编辑产品" : "新增产品";
-  form.id.value = product?.id || "";
-  form.code.value = product?.code || "";
-  form.code.disabled = Boolean(product);
-  form.name.value = product?.name || "";
-  form.series.value = product?.series || "";
-  form.tag.value = product?.tag || "";
-  form.manufacturer.value = product?.manufacturer || "";
-  form.sort_order.value = product?.sort_order || "";
-  form.image_url.value = product?.image_url || "";
-  $("#productDialog").showModal();
-}
-
-function openProductManage() {
-  $("#productManageForm").reset();
-  $("#productManageForm").id.value = "";
-  $("#productManageForm").code.disabled = false;
-  renderProductManageList();
-  $("#productManageDialog").showModal();
-}
-
-function renderProductManageList() {
-  if (!state.catalog) return;
-  $("#productManageList").innerHTML = state.catalog.products.map((product) => `
-    <article class="user-item">
-      <div>
-        <strong>${escapeHtml(product.name)}</strong>
-        <span>${escapeHtml(product.code)} · ${escapeHtml(product.series || "-")}</span>
-      </div>
-      <div class="user-actions">
-        <button type="button" data-edit-product="${product.id}">编辑</button>
-        <button type="button" data-delete-product="${product.id}">删除</button>
-      </div>
-    </article>
-  `).join("") || `<p class="muted">暂无产品</p>`;
-}
-
-async function saveManageProduct() {
-  const form = $("#productManageForm");
-  const data = Object.fromEntries(new FormData(form).entries());
-  if (!data.code.trim()) {
-    showMessage("产品型号不能为空", "error");
-    return;
-  }
-  if (data.id) {
-    await api(`/api/products/${data.id}`, { method: "PUT", body: JSON.stringify(data) });
-  } else {
-    await api("/api/products", { method: "POST", body: JSON.stringify(data) });
-  }
-  form.reset();
-  form.id.value = "";
-  form.code.disabled = false;
-  await loadCatalog();
-  renderProductManageList();
-  showMessage("产品已保存");
-}
-
 function openParameterDialog(parameter = null) {
   const form = $("#paramForm");
   form.reset();
@@ -415,21 +350,6 @@ function openParameterDialog(parameter = null) {
   form.sort_order.value = parameter?.sort_order || "";
   form.filterable.checked = Boolean(parameter?.filterable);
   $("#paramDialog").showModal();
-}
-
-async function saveProduct() {
-  const form = $("#productForm");
-  const data = Object.fromEntries(new FormData(form).entries());
-  data.sort_order = Number(data.sort_order || 0);
-  if (form.id.value) {
-    await api(`/api/products/${form.id.value}`, { method: "PUT", body: JSON.stringify(data) });
-  } else {
-    await api("/api/products", { method: "POST", body: JSON.stringify(data) });
-  }
-  $("#productDialog").close();
-  await loadCatalog();
-  if ($("#productManageDialog").open) renderProductManageList();
-  showMessage("产品已保存");
 }
 
 async function saveParameter() {
@@ -707,7 +627,8 @@ function renderTemplateList(target = "#templateList") {
   const groups = groupRows();
   const el = $(target);
   if (!el) return;
-  el.innerHTML = groups.map((group) => `
+  el.innerHTML =
+    groups.map((group) => `
     <section class="template-group" data-group-id="${group.id}">
       <h3 draggable="true">
         <span class="template-group-drag-handle">⠿</span>
@@ -1424,32 +1345,12 @@ function bindEvents() {
     }
   });
 
-  $("#addProductBtn").addEventListener("click", () => openProductManage());
   $("#uploadBtn").addEventListener("click", () => $("#uploadDialog").showModal());
   $("#templateAddParamBtn").addEventListener("click", () => openParameterDialog());
   $("#adminTemplateAddParamBtn").addEventListener("click", () => openParameterDialog());
-  $("#closeProductBtn").addEventListener("click", () => $("#productDialog").close());
-  $("#cancelProductBtn").addEventListener("click", () => $("#productDialog").close());
   $("#closeParamBtn").addEventListener("click", () => $("#paramDialog").close());
   $("#cancelParamBtn").addEventListener("click", () => $("#paramDialog").close());
   $("#closeTemplateBtn").addEventListener("click", () => $("#templateDialog").close());
-  $("#saveProductBtn").addEventListener("click", () => saveProduct().catch((error) => showMessage(error.message, "error")));
-  $("#closeProductManageBtn").addEventListener("click", () => $("#productManageDialog").close());
-  $("#saveManageProductBtn").addEventListener("click", () => saveManageProduct().catch((error) => showMessage(error.message, "error")));
-  $("#productManageList").addEventListener("click", async (event) => {
-    const edit = event.target.closest("[data-edit-product]");
-    const remove = event.target.closest("[data-delete-product]");
-    if (edit) {
-      const product = state.catalog.products.find((item) => item.id === Number(edit.dataset.editProduct));
-      if (product) openProductDialog(product);
-    }
-    if (remove && window.confirm(`确认删除产品 ${remove.closest(".user-item").querySelector("strong").textContent}？相关参数值也会一并删除。`)) {
-      await api(`/api/products/${remove.dataset.deleteProduct}`, { method: "DELETE" });
-      await loadCatalog();
-      renderProductManageList();
-      showMessage("产品已删除");
-    }
-  });
   $("#saveParamBtn").addEventListener("click", () => saveParameter().catch((error) => showMessage(error.message, "error")));
   $("#submitUploadBtn").addEventListener("click", () => submitUpload().catch((error) => showMessage(error.message, "error")));
   // --- template list: click, drag-sort (bound to both dialog + admin panel) ---
@@ -1461,14 +1362,14 @@ function bindEvents() {
     if (!container) return;
 
     container.addEventListener("click", async (event) => {
-      const edit = event.target.closest("[data-edit-param]");
-      const remove = event.target.closest("[data-delete-param]");
-      if (edit) {
-        const parameter = state.catalog.parameters.find((item) => item.id === Number(edit.dataset.editParam));
+      const editParam = event.target.closest("[data-edit-param]");
+      const removeParam = event.target.closest("[data-delete-param]");
+      if (editParam) {
+        const parameter = state.catalog.parameters.find((item) => item.id === Number(editParam.dataset.editParam));
         openParameterDialog(parameter);
       }
-      if (remove && window.confirm("确认删除该参数模板？对应参数值也会删除。")) {
-        await api(`/api/parameters/${remove.dataset.deleteParam}`, { method: "DELETE" });
+      if (removeParam && window.confirm("确认删除该参数模板？对应参数值也会删除。")) {
+        await api(`/api/parameters/${removeParam.dataset.deleteParam}`, { method: "DELETE" });
         await loadCatalog();
         if ($("#templateDialog").open) renderTemplateList("#templateList");
         renderTemplateList("#adminTemplateList");
@@ -1657,14 +1558,6 @@ function bindEvents() {
   $("#selectionTable").addEventListener("dblclick", (event) => {
     const cell = event.target.closest(".value-cell");
     if (cell) editValueInline(cell).catch((error) => showMessage(error.message, "error"));
-  });
-  $("#selectionTable").addEventListener("click", (event) => {
-    const editButton = event.target.closest("[data-edit-product]");
-    if (editButton && roleCanEdit()) {
-      const product = state.catalog.products.find((item) => item.id === Number(editButton.dataset.editProduct));
-      openProductDialog(product);
-      return;
-    }
   });
   [
     ["searchInput", "q"],

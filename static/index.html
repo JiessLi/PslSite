@@ -127,7 +127,6 @@
           <div class="commands">
             <a class="secondary role-admin" href="/api/template.csv">下载模板</a>
             <button id="uploadBtn" class="secondary role-edit" type="button">上传模板</button>
-            <button id="addProductBtn" class="primary role-edit" type="button">产品管理</button>
           </div>
         </section>
 
@@ -142,45 +141,6 @@
     </main>
 
     <div id="message" class="message"></div>
-
-    <dialog id="productManageDialog">
-      <div class="dialog-body">
-        <div class="dialog-head">
-          <h2>产品管理</h2>
-          <button class="icon" id="closeProductManageBtn" type="button">×</button>
-        </div>
-        <form id="productManageForm" class="user-form">
-          <input name="id" type="hidden" />
-          <input name="code" placeholder="产品型号（必填）" required />
-          <input name="name" placeholder="产品名称" />
-          <button class="primary" id="saveManageProductBtn" type="button">新增产品</button>
-        </form>
-        <div id="productManageList" class="users-list"></div>
-      </div>
-    </dialog>
-
-    <dialog id="productDialog">
-      <form id="productForm" method="dialog" class="dialog-body">
-        <div class="dialog-head">
-          <h2 id="productDialogTitle">产品</h2>
-          <button class="icon" id="closeProductBtn" type="button">×</button>
-        </div>
-        <input name="id" type="hidden" />
-        <div class="form-grid two">
-          <label><span>产品型号</span><input name="code" required /></label>
-          <label><span>产品名称</span><input name="name" required /></label>
-          <label><span>产品系列</span><input name="series" /></label>
-          <label><span>产品标签</span><input name="tag" /></label>
-          <label><span>主体品牌</span><input name="manufacturer" /></label>
-          <label><span>排序</span><input name="sort_order" inputmode="numeric" /></label>
-          <label class="wide"><span>产品图片 URL</span><input name="image_url" placeholder="可填图片链接，留空显示占位" /></label>
-        </div>
-        <div class="dialog-actions">
-          <button class="ghost" id="cancelProductBtn" type="button">取消</button>
-          <button class="primary" id="saveProductBtn" type="button">保存</button>
-        </div>
-      </form>
-    </dialog>
 
     <dialog id="paramDialog">
       <form id="paramForm" method="dialog" class="dialog-body">
